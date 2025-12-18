@@ -1,0 +1,5 @@
+flask==3.0.0
+flask-cors==4.0.0
+spotdl==4.2.5
+yt-dlp==2024.12.13
+python-dotenv==1.0.0
