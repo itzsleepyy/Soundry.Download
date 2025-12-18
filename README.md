@@ -64,7 +64,26 @@ npm install
 
 ## Running the Application
 
-### Start Backend Server
+### Option 1: Using Docker (Recommended)
+
+The easiest way to run the entire application is using Docker Compose:
+
+```bash
+docker-compose up --build
+```
+
+This will start both the backend and frontend services:
+- Frontend: `http://localhost`
+- Backend API: `http://localhost:5000`
+
+To stop the services:
+```bash
+docker-compose down
+```
+
+### Option 2: Manual Setup
+
+#### Start Backend Server
 
 ```bash
 cd backend
@@ -73,7 +92,7 @@ python app.py
 
 The backend API will be available at `http://localhost:5000`
 
-### Start Frontend Development Server
+#### Start Frontend Development Server
 
 ```bash
 cd frontend
