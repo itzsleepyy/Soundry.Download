@@ -2,6 +2,8 @@
 
 A modern web application for downloading music from various platforms including Spotify, YouTube, SoundCloud, and more. Built with Angular and PrimeNG for the frontend, and Python Flask for the backend.
 
+> 🚀 **New here?** Check out the [Quick Start Guide](QUICKSTART.md) to get running in minutes!
+
 ## Features
 
 - 🎵 Download music from multiple platforms:
