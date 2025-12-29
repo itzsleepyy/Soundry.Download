@@ -6,6 +6,7 @@ import { Music, Moon, Sun } from "lucide-react"
 import { useState, useEffect } from "react"
 import { Routes, Route } from "react-router-dom"
 import { Home } from "@/pages/Home"
+import { Downloads } from "@/pages/Downloads"
 import { Footer } from "@/components/Footer"
 
 
@@ -69,6 +70,7 @@ function App() {
                     <main className="flex-1 flex flex-col items-center justify-center w-full">
                         <Routes>
                             <Route path="/" element={<Home />} />
+                            <Route path="/downloads" element={<Downloads />} />
                         </Routes>
                     </main>
                 </div>

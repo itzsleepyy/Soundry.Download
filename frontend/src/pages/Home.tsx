@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Music, Download } from "lucide-react"
 import { IconBrandSpotify, IconBrandSoundcloud, IconBrandYoutube } from "@tabler/icons-react"
+import { useNavigate } from "react-router-dom"
+import { useDownloadManager } from "@/lib/downloads"
 import { useState } from "react"
 import { toast } from "sonner"
 
@@ -12,14 +14,18 @@ export function Home() {
   const [url, setUrl] = useState("")
   const [format, setFormat] = useState("FLAC")
 
-  const handleDownload = () => {
+  const { addToQueue } = useDownloadManager()
+  const navigate = useNavigate()
+
+  const handleDownload = async () => {
     if (!url) {
       toast.error("Please enter a URL")
       return
     }
-    console.log("Downloading...", { url, format })
-    toast.success(`Starting download for ${format}...`)
-  }
+
+    await addToQueue(url)
+    navigate('/downloads')
+  };
 
   const platforms = [
     { name: "Spotify", icon: <IconBrandSpotify size={20} className="text-[#1DB954]" /> },
@@ -73,9 +79,9 @@ export function Home() {
       <div className="w-full max-w-2xl mt-12 p-1.5 bg-card/60 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl flex flex-col md:flex-row gap-2">
 
         {/* Format Selector */}
-        <div className="w-full md:w-[130px]">
+        <div className="w-full md:w-[130px] flex items-center">
           <Select value={format} onValueChange={setFormat}>
-            <SelectTrigger className="h-12 text-base">
+            <SelectTrigger className="w-full h-full text-base justify-center [&>span]:w-full [&>span]:text-center [&>svg]:hidden rounded-none">
               <SelectValue placeholder="Format" />
             </SelectTrigger>
             <SelectContent>
@@ -102,8 +108,9 @@ export function Home() {
         {/* Download Button */}
         <Button
           size="lg"
+          variant="outline"
           onClick={handleDownload}
-          className="h-12 px-8 text-base font-semibold"
+          className="h-12 px-8 text-base font-semibold rounded-none"
         >
           Download <Download className="ml-2 h-4 w-4" />
         </Button>
