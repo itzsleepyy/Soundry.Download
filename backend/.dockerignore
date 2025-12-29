@@ -1,11 +1,30 @@
-__pycache__
+# Dependencies
+node_modules/
+__pycache__/
 *.pyc
 *.pyo
-*.pyd
-.Python
-env/
-venv/
-.env
-.env.*
+.git/
+.gitignore
+
+# Build outputs (local only)
+downloads/
 *.log
-README.md
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Tests
+tests/
+*.test.js
+
+# Documentation (optional - uncomment if you want smaller builds)
+# *.md
+# LICENSE
