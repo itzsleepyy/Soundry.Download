@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Loader2, ArrowRight } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function Home() {
     const [url, setUrl] = useState('');
@@ -30,7 +31,7 @@ export default function Home() {
         try {
             const payload = {
                 url,
-                formats: ['mp3', 'flac']
+                formats: ['mp3', 'flac', 'wav', 'opus', 'ogg']
             };
 
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/jobs`, {
@@ -47,6 +48,11 @@ export default function Home() {
                 throw new Error(data.error || 'Failed to submit job');
             }
 
+            toast.success("Request received", {
+                description: "Your audio is being processed."
+            });
+
+            // Redirect to library
             router.push('/library?tab=session');
 
         } catch (err) {

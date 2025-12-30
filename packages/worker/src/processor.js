@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { downloadYoutube, getYoutubeMetadata } = require('./providers/youtube');
+const { getSpotifyMetadata } = require('./providers/spotify');
 const { transcodeFile } = require('./transcoder');
 const { v4: uuidv4 } = require('uuid');
 
@@ -12,133 +13,126 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 }
 
 async function processJob(job, prisma) {
-    const { url, formats, sessionToken } = job.data;
+    const { url, formats, sessionToken, groupId } = job.data;
 
-    // 1. provider detection
-    // naive, assumes youtube for now as per MVP requirements
-    if (!url.includes('youtube.com') && !url.includes('youtu.be') && !url.includes('soundcloud') && !url.includes('spotify')) {
-        throw new Error('Unsupported provider');
-    }
+    let provider = 'youtube';
+    if (url.includes('spotify.com')) provider = 'spotify';
+    else if (url.includes('soundcloud.com')) provider = 'soundcloud';
+    else if (url.includes('youtube.com') || url.includes('youtu.be')) provider = 'youtube';
+    else throw new Error('Unsupported provider');
 
-    // 2. Metadata fetch
-    // We need to create the Track record first to have an ID
-    let track;
+    let trackId = uuidv4();
+    const trackDir = path.join(DOWNLOADS_DIR, trackId);
+    if (!fs.existsSync(trackDir)) fs.mkdirSync(trackDir, { recursive: true });
 
-    // Check if track already exists (by URL/Provider ID comparison?)
-    // For MVP, simplistic: we just process it. But if we want to dedupe, we'd need a providerId.
-    // Let's rely on yt-dlp to get ID.
+    let title = 'Processing...';
+    let artist = 'Unknown Artist';
+    let duration = 0;
+    let providerId = url; // Fallback
+    // For Spotify, we need to construct a search query later
+    let downloadUrl = url;
 
-    const metadata = await getYoutubeMetadata(url);
-    if (!metadata) throw new Error('Could not fetch metadata');
+    // 1. Fetch Metadata & Prepare Download
+    try {
+        if (provider === 'spotify') {
+            console.log(`Fetching Spotify metadata for: ${url}`);
+            const meta = await getSpotifyMetadata(url);
+            title = meta.title;
+            artist = meta.artist;
+            duration = Math.round(meta.duration || 0);
+            providerId = meta.providerId;
 
-    const { title, artist, duration, providerId } = metadata;
+            // Construct Search Query for Audio Download
+            // "Artist - Title audio"
+            downloadUrl = `ytsearch1:${meta.artist} - ${meta.title} audio`;
+            console.log(`Resolved Spotify track to search query: ${downloadUrl}`);
 
-    // Check if we already have this specific track completed and not expired
-    const existingTrack = await prisma.track.findFirst({
-        where: {
-            // We don't have providerId in Schema yet! Plan oversight? 
-            // "Track -> provider (enum), title, artist..." 
-            // We didn't store the source ID. We should have.
-            // But per "Global Library" requirements: "MUST NOT expose original source URLs"
-            // So we can store it internally but not expose it.
-            // Since I cannot change schema easily without migration locally (I can run migrate), I will just create a new track every time?
-            // "If track already exists in DB and not expired -> reuse files"
-            // So I NEED to find it. I'll search by title + artist roughly or add a field if I can.
-            // I will match by Title + Artist + Duration for now as a fuzzy match if I can't change schema.
-            // OR I can use the `provider` field to store "youtube:<id>"? That works.
-            provider: `youtube:${providerId}`,
-            expiresAt: { gt: new Date() },
-            status: 'completed'
-        },
-        include: { files: true }
-    });
-
-    if (existingTrack) {
-        console.log(`Found existing track ${existingTrack.id}, reusing.`);
-
-        // Ensure requested formats exist
-        // If some missing, we might need to generate them. 
-        // For simple MVP: if track exists, we assume we have what we need or we return what we have.
-        // But requirement says "If track... and required formats exist".
-        // Let's create a SessionItem for this user
-        if (sessionToken) {
-            // Check if already in session
-            const sessionItem = await prisma.sessionItem.findFirst({
-                where: { sessionToken, trackId: existingTrack.id }
-            });
-            if (!sessionItem) {
-                await prisma.sessionItem.create({
-                    data: {
-                        sessionToken,
-                        trackId: existingTrack.id,
-                        source: 'requested'
-                    }
-                });
+        } else if (provider === 'youtube') {
+            const meta = await getYoutubeMetadata(url);
+            if (meta) {
+                title = meta.title;
+                artist = meta.artist;
+                duration = meta.duration;
+                providerId = meta.providerId || url;
             }
         }
-        return { trackId: existingTrack.id, status: 'completed' };
+    } catch (e) {
+        console.warn('Metadata fetch failed, creating placeholder track or failing if critical', e);
+        // For Spotify, metadata fetch is critical to get the search query.
+        if (provider === 'spotify') throw e;
     }
 
-    // Create New Track
-    track = await prisma.track.create({
+    // 2. Create Database Record
+    const track = await prisma.track.create({
         data: {
-            provider: `youtube:${providerId}`,
+            id: trackId,
+            provider: `${provider}:${providerId}`,
             title,
             artist,
-            durationSeconds: duration,
+            durationSeconds: duration || 0,
             status: 'processing'
         }
     });
 
-    // Register Session Item
     if (sessionToken) {
         await prisma.sessionItem.create({
             data: {
                 sessionToken,
                 trackId: track.id,
-                source: 'requested'
+                source: 'requested',
+                groupId: groupId
             }
         });
     }
 
+    // 3. Download & Transcode
     try {
-        // Create folder for track
-        const trackDir = path.join(DOWNLOADS_DIR, track.id);
-        if (!fs.existsSync(trackDir)) fs.mkdirSync(trackDir, { recursive: true });
+        // We always use a consistent source name for intermediate file
+        // downloadYoutube uses yt-dlp which handles container detection, but we force output path.
+        // We'll use .webm as a generic container wrapper for downloadYoutube's output if possible,
+        // or rely on yt-dlp to append extension if we don't force it?
+        // simple-youtube-dl provider uses `output: outputPath`.
+        const sourcePath = path.join(trackDir, 'source.webm');
 
-        // Download Source (best audio)
-        const sourcePath = path.join(trackDir, 'source.webm'); // assume webm/m4a
-        await downloadYoutube(url, sourcePath);
+        console.log(`Downloading audio from: ${downloadUrl} to ${sourcePath}`);
+        await downloadYoutube(downloadUrl, sourcePath);
 
-        // Transcode to requested formats
-        const filesCreated = [];
-
-        for (const format of formats) {
-            const fileName = `${track.id}.${format}`; // Simplified name or title? 
-            // File table verification: "path // Relative to storage root"
-            // We'll store as `UUID/format.ext` to be clean.
-            const relPath = `${track.id}/${format}.${format}`;
-            const destPath = path.join(trackDir, `${format}.${format}`);
-
-            const stats = await transcodeFile(sourcePath, destPath, format);
-
-            filesCreated.push({
-                format,
-                path: relPath,
-                sizeBytes: stats.size
-            });
+        // Verification: Check if file exists. 
+        // yt-dlp might append extension (e.g. source.webm.m4a) if we are not careful?
+        // With `output: outputPath`, it usually respects it. But if it merges formats, it might be weird.
+        // Let's check for any file starting with 'source' if exact match fails.
+        let actualSourcePath = sourcePath;
+        if (!fs.existsSync(sourcePath)) {
+            const files = fs.readdirSync(trackDir);
+            const found = files.find(f => f.startsWith('source'));
+            if (found) actualSourcePath = path.join(trackDir, found);
+            else throw new Error('Download failed: Source file not found');
         }
 
-        // Cleanup source?
-        fs.unlinkSync(sourcePath);
+        const filesCreated = [];
+        for (const format of formats) {
+            const relPath = `${track.id}/${format}.${format}`;
+            const destPath = path.join(trackDir, `${format}.${format}`);
+            console.log(`Transcoding to ${format}...`);
+            const stats = await transcodeFile(actualSourcePath, destPath, format);
+            filesCreated.push({ format, path: relPath, sizeBytes: stats.size });
+        }
 
-        // Update Track
+        // Cleanup source
+        if (fs.existsSync(actualSourcePath)) {
+            try { fs.unlinkSync(actualSourcePath); } catch (e) { }
+        }
+
+        // 4. Update Success
         const now = new Date();
-        const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24h
+        const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
         await prisma.track.update({
             where: { id: track.id },
             data: {
+                title, // Update in case it changed or was placeholder
+                artist,
+                durationSeconds: duration,
                 status: 'completed',
                 completedAt: now,
                 expiresAt: expiresAt,
@@ -156,11 +150,14 @@ async function processJob(job, prisma) {
 
     } catch (err) {
         console.error('Processing failed', err);
+        let errMsg = err.message;
+        if (errMsg.includes('Status code: 429')) errMsg = 'Rate Limit Reached (YouTube/Spotify)';
+
         await prisma.track.update({
             where: { id: track.id },
             data: {
                 status: 'failed',
-                error: err.message
+                error: errMsg
             }
         });
         throw err;

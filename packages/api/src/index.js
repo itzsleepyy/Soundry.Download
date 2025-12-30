@@ -4,6 +4,10 @@ const morgan = require('morgan');
 const { PrismaClient } = require('@prisma/client');
 const { Queue } = require('bullmq');
 const Redis = require('ioredis');
+const archiver = require('archiver');
+const { getSpotifyData } = require('./services/spotify');
+const path = require('path');
+const fs = require('fs');
 
 // --- Configuration ---
 const PORT = process.env.PORT || 3001;
@@ -28,7 +32,6 @@ app.use(express.json());
 app.use(morgan('tiny'));
 
 // --- Middleware ---
-// Simple session extraction, validation happens in logic if needed
 const extractSession = (req, res, next) => {
     const token = req.headers['x-session-token'] || req.query.token;
     if (token) {
@@ -41,7 +44,6 @@ app.use(extractSession);
 // --- Routes ---
 const apiRouter = express.Router();
 
-// Health Check
 apiRouter.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // 1. POST /api/jobs
@@ -56,25 +58,70 @@ apiRouter.post('/jobs', async (req, res) => {
         }
         if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
 
-        // TODO: Validate formats enum
-        // TODO: Check rate limits (can use express-rate-limit middleware globally or per route)
+        // Check for Spotify URL to expand
+        let jobsToQueue = [];
+        let groupId = null;
+        let groupTitle = 'Playlist';
 
-        // For MVP, simplistic check:
-        // Actually, we don't check for existing track here in a complex way for MVP speed,
-        // we just push to queue. The worker will handle "idempotency" or we can do a quick check.
-        // Let's do a quick check if a track exists and is valid to save queue time.
+        if (url.includes('spotify.com')) {
+            try {
+                const data = await getSpotifyData(url);
+                if (data.type === 'playlist' || data.type === 'album') {
+                    // Create Session Group
+                    // Use actual tracks length to avoid mismatch with Spotify's total which might include local/unplayable files
+                    const group = await prisma.sessionGroup.create({
+                        data: {
+                            sessionToken,
+                            title: data.title || 'Unknown Header',
+                            totalTracks: data.tracks.length
+                        }
+                    });
+                    groupId = group.id;
+                    groupTitle = data.title;
 
-        // Simulating a unique provider ID check would be ideal, but for now we just accept the URL.
-        // We will enqueue it.
+                    // Prepare items
+                    jobsToQueue = data.tracks.map(t => ({
+                        url: t.url,
+                        meta: { title: t.name, artist: t.artist },
+                        formats,
+                        sessionToken,
+                        groupId
+                    }));
+                } else {
+                    // Single track
+                    jobsToQueue.push({
+                        url,
+                        formats,
+                        sessionToken
+                    });
+                }
+            } catch (e) {
+                console.error("Spotify expansion failed", e);
+                return res.status(400).json({ error: 'Failed to expand Spotify URL', details: e.message });
+            }
+        } else {
+            // Standard handling
+            jobsToQueue.push({
+                url,
+                formats,
+                sessionToken
+            });
+        }
 
-        const job = await downloadQueue.add('download', {
-            url,
-            formats,
-            sessionToken,
-            requestId: require('uuid').v4()
+        // Queue all
+        const jobs = await Promise.all(jobsToQueue.map(jobData =>
+            downloadQueue.add('download', {
+                ...jobData,
+                requestId: require('uuid').v4()
+            })
+        ));
+
+        res.json({
+            count: jobs.length,
+            status: 'queued',
+            groupId,
+            message: groupId ? `Queued ${jobs.length} tracks from ${groupTitle}` : 'Job queued'
         });
-
-        res.json({ jobId: job.id, status: 'queued' });
 
     } catch (error) {
         console.error('Job error:', error);
@@ -88,21 +135,25 @@ apiRouter.get('/library/global', async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const pageSize = parseInt(req.query.pageSize) || 20;
         const offset = (page - 1) * pageSize;
+        const q = req.query.q;
 
-        // Filter: ExpiresAt > Now AND Status = completed
         const now = new Date();
+        const where = {
+            expiresAt: { gt: now },
+            status: 'completed'
+        };
+
+        if (q) {
+            where.OR = [
+                { title: { contains: q } },
+                { artist: { contains: q } }
+            ];
+        }
 
         const tracks = await prisma.track.findMany({
-            where: {
-                expiresAt: { gt: now },
-                status: 'completed'
-            },
-            include: {
-                files: true
-            },
-            orderBy: {
-                createdAt: 'desc'
-            },
+            where,
+            include: { files: true },
+            orderBy: { createdAt: 'desc' },
             take: pageSize,
             skip: offset
         });
@@ -118,14 +169,27 @@ apiRouter.get('/library/global', async (req, res) => {
 apiRouter.get('/library/session', async (req, res) => {
     try {
         const sessionToken = req.sessionToken;
+        const q = req.query.q;
         if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
 
+        const where = { sessionToken };
+        if (q) {
+            // Search inside tracks
+            where.track = {
+                OR: [
+                    { title: { contains: q } },
+                    { artist: { contains: q } }
+                ]
+            };
+        }
+
         const sessionItems = await prisma.sessionItem.findMany({
-            where: { sessionToken },
+            where,
             include: {
                 track: {
                     include: { files: true }
-                }
+                },
+                group: true
             },
             orderBy: { createdAt: 'desc' }
         });
@@ -133,6 +197,31 @@ apiRouter.get('/library/session', async (req, res) => {
         res.json({ items: sessionItems });
     } catch (error) {
         console.error('Session library error:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+// 3.1 DELETE /api/library/session/:id
+apiRouter.delete('/library/session/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const sessionToken = req.sessionToken;
+        if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
+
+        // Verify ownership and existence
+        const item = await prisma.sessionItem.findFirst({
+            where: { id, sessionToken }
+        });
+
+        if (!item) return res.status(404).json({ error: 'Item not found' });
+
+        await prisma.sessionItem.delete({
+            where: { id }
+        });
+
+        res.json({ status: 'deleted' });
+    } catch (error) {
+        console.error('Delete item error:', error);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
@@ -149,47 +238,22 @@ apiRouter.get('/download/:trackId/:format', async (req, res) => {
         });
 
         if (!track) return res.status(404).json({ error: 'Track not found' });
-        if (track.expiresAt && new Date() > track.expiresAt) {
-            return res.status(410).json({ error: 'Track expired' });
-        }
+        // Simplified expire check
+        if (track.expiresAt && new Date() > track.expiresAt) res.status(410).json({ error: 'Track expired' });
 
         const file = track.files.find(f => f.format === format);
         if (!file) return res.status(404).json({ error: 'Format not available' });
 
-        // Record download session item if token present
         if (sessionToken) {
-            // Fire and forget or await? Await is safer for consistency.
-            // Check if exists first to avoid dupes?
-            // "source" should be "downloaded".
-            // If the user requested it, they already have a "requested" item.
-            // Requirement: "the tracks the user downloaded from the Global Library"
-            // So if they requested it, it's already there. If not, add it.
-
-            const existing = await prisma.sessionItem.findFirst({
-                where: {
-                    sessionToken,
-                    trackId
-                }
-            });
-
+            const existing = await prisma.sessionItem.findFirst({ where: { sessionToken, trackId } });
             if (!existing) {
                 await prisma.sessionItem.create({
-                    data: {
-                        sessionToken,
-                        trackId,
-                        source: 'downloaded'
-                    }
+                    data: { sessionToken, trackId, source: 'downloaded' }
                 });
             }
         }
 
-        // Stream file
-        // The path in DB is relative to /data/downloads, e.g. "uuid/mp3.mp3"
-        // But we need to serve it from the absolute path in the container.
-        const absolutePath = require('path').join(DOWNLOADS_DIR, file.path);
-
-        // Simple download with express.download
-        // We set Content-Disposition attachment to trigger download
+        const absolutePath = path.join(DOWNLOADS_DIR, file.path);
         res.download(absolutePath, `${track.title}.${format}`);
 
     } catch (error) {
@@ -198,10 +262,53 @@ apiRouter.get('/download/:trackId/:format', async (req, res) => {
     }
 });
 
+// 5. GET /api/download-group/:groupId
+apiRouter.get('/download-group/:groupId', async (req, res) => {
+    try {
+        const { groupId } = req.params;
+        const format = req.query.format || 'mp3'; // Default format preference for zip? Or zip all?
+
+        const group = await prisma.sessionGroup.findUnique({
+            where: { id: groupId },
+            include: {
+                items: {
+                    include: {
+                        track: { include: { files: true } }
+                    }
+                }
+            }
+        });
+
+        if (!group) return res.status(404).json({ error: 'Group not found' });
+
+        // Setup Zip
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        res.attachment(`${group.title}.zip`);
+
+        archive.pipe(res);
+
+        for (const item of group.items) {
+            if (item.track.status === 'completed') {
+                const file = item.track.files.find(f => f.format === format) || item.track.files[0];
+                if (file) {
+                    const absPath = path.join(DOWNLOADS_DIR, file.path);
+                    if (fs.existsSync(absPath)) {
+                        archive.file(absPath, { name: `${item.track.artist} - ${item.track.title}.${file.format}` });
+                    }
+                }
+            }
+        }
+
+        await archive.finalize();
+
+    } catch (error) {
+        console.error('Group download error:', error);
+        res.status(500).end();
+    }
+});
+
 app.use('/api', apiRouter);
 
-// Start
-// Start Cleanup Task
 const { startCleanupCron } = require('./cleanup');
 startCleanupCron();
 
