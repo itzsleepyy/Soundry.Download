@@ -36,8 +36,29 @@ console.log('=== Soundry API Configuration ===');
 console.log('Port:', PORT);
 console.log('Redis URL:', REDIS_URL);
 console.log('Downloads Dir:', DOWNLOADS_DIR);
-console.log('Spotify Client ID:', process.env.SPOTIFY_CLIENT_ID ? `${process.env.SPOTIFY_CLIENT_ID.substring(0, 8)}...` : 'NOT SET');
-console.log('Spotify Client Secret:', process.env.SPOTIFY_CLIENT_SECRET ? 'SET (hidden)' : 'NOT SET');
+
+// Detailed Spotify credentials logging
+const clientId = process.env.SPOTIFY_CLIENT_ID;
+const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+
+if (clientId) {
+    console.log('Spotify Client ID:', `${clientId.substring(0, 8)}...${clientId.substring(clientId.length - 4)}`);
+    console.log('  - Length:', clientId.length);
+    console.log('  - First char code:', clientId.charCodeAt(0));
+    console.log('  - Last char code:', clientId.charCodeAt(clientId.length - 1));
+} else {
+    console.log('Spotify Client ID: NOT SET');
+}
+
+if (clientSecret) {
+    console.log('Spotify Client Secret: SET (hidden)');
+    console.log('  - Length:', clientSecret.length);
+    console.log('  - First char code:', clientSecret.charCodeAt(0));
+    console.log('  - Last char code:', clientSecret.charCodeAt(clientSecret.length - 1));
+} else {
+    console.log('Spotify Client Secret: NOT SET');
+}
+
 console.log('=================================');
 
 
@@ -439,6 +460,39 @@ apiRouter.get('/download-group/:groupId', async (req, res) => {
     } catch (error) {
         console.error('Group download error:', error);
         res.status(500).end();
+    }
+});
+
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        spotify: {
+            clientIdSet: !!process.env.SPOTIFY_CLIENT_ID,
+            clientSecretSet: !!process.env.SPOTIFY_CLIENT_SECRET
+        }
+    });
+});
+
+// Spotify credentials test endpoint
+app.get('/test-spotify', async (req, res) => {
+    try {
+        const { getSpotifyData } = require('./services/spotify');
+        // Test with a known public Spotify track
+        const testUrl = 'https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp'; // Mr. Brightside
+        const data = await getSpotifyData(testUrl);
+        res.json({
+            success: true,
+            message: 'Spotify credentials are valid',
+            testTrack: data.tracks[0]?.name || 'Unknown'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            details: error.toString()
+        });
     }
 });
 
