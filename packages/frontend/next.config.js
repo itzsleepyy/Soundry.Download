@@ -8,10 +8,13 @@ const nextConfig = {
         domains: [],
     },
     async rewrites() {
+        // Use environment variable for API URL, fallback to localhost for development
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3334';
+
         return [
             {
                 source: '/api/:path*',
-                destination: 'http://localhost:3334/api/:path*', // Proxy to Backend
+                destination: `${apiUrl}/api/:path*`,
             },
         ]
     },
