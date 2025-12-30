@@ -1,0 +1,12 @@
+node_modules
+.DS_Store
+*.log
+.env
+.next
+dist
+build
+.vercel
+/data/downloads/*
+!/data/downloads/.keep
+/data/*.db
+/data/*.db-journal
