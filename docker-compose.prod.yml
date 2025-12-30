@@ -24,7 +24,7 @@ services:
     labels:
       - "coolify.managed=true"
       - "traefik.enable=true"
-      - "traefik.http.routers.soundry-api.rule=Host(`${API_DOMAIN:-api.soundry.local}`)"
+      - "traefik.http.routers.soundry-api.rule=Host(`api.soundry.download`)"
       - "traefik.http.routers.soundry-api.entrypoints=websecure"
       - "traefik.http.routers.soundry-api.tls=true"
       - "traefik.http.routers.soundry-api.tls.certresolver=letsencrypt"
@@ -58,11 +58,11 @@ services:
       context: .
       dockerfile: packages/frontend/Dockerfile
       args:
-        # Use the API domain for client-side requests
-        NEXT_PUBLIC_API_URL: https://${API_DOMAIN:-api.soundry.local}
+        # IMPORTANT: Replace with your actual API domain
+        NEXT_PUBLIC_API_URL: https://api.soundry.download
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=https://${API_DOMAIN:-api.soundry.local}
+      - NEXT_PUBLIC_API_URL=https://api.soundry.download
     depends_on:
       - api
     restart: unless-stopped
@@ -71,7 +71,7 @@ services:
     labels:
       - "coolify.managed=true"
       - "traefik.enable=true"
-      - "traefik.http.routers.soundry-frontend.rule=Host(`${FRONTEND_DOMAIN:-soundry.local}`)"
+      - "traefik.http.routers.soundry-frontend.rule=Host(`soundry.download`)"
       - "traefik.http.routers.soundry-frontend.entrypoints=websecure"
       - "traefik.http.routers.soundry-frontend.tls=true"
       - "traefik.http.routers.soundry-frontend.tls.certresolver=letsencrypt"
