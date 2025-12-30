@@ -1,0 +1,172 @@
+const SpotifyWebApi = require('spotify-web-api-node');
+
+let spotifyApi = null;
+let tokenExpirationTime = 0;
+
+function getSpotifyApi() {
+    if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) {
+        throw new Error('Missing Spotify Credentials');
+    }
+
+    if (!spotifyApi) {
+        spotifyApi = new SpotifyWebApi({
+            clientId: process.env.SPOTIFY_CLIENT_ID,
+            clientSecret: process.env.SPOTIFY_CLIENT_SECRET
+        });
+    }
+    return spotifyApi;
+}
+
+async function ensureToken() {
+    const api = getSpotifyApi();
+    const now = Date.now();
+
+    if (now >= tokenExpirationTime - 300000) {
+        try {
+            const data = await api.clientCredentialsGrant();
+            api.setAccessToken(data.body['access_token']);
+            tokenExpirationTime = now + (data.body['expires_in'] * 1000);
+            console.log('Spotify access token refreshed (API)');
+        } catch (error) {
+            console.error('Failed to retrieve Spotify access token', error);
+            throw error;
+        }
+    }
+    return api;
+}
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function executeWithRetry(fn, retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            await ensureToken();
+            return await fn();
+        } catch (error) {
+            if (error.statusCode === 429) {
+                const retryAfter = error.headers['retry-after']
+                    ? parseInt(error.headers['retry-after']) * 1000
+                    : Math.pow(2, i) * 1000;
+                console.warn(`Spotify Rate Limit. Retrying after ${retryAfter}ms...`);
+                await sleep(retryAfter);
+                continue;
+            }
+            if (i === retries - 1) throw error;
+            await sleep(1000);
+        }
+    }
+}
+
+async function getSpotifyData(url) {
+    const api = getSpotifyApi();
+    const parts = url.split('/');
+    const typeIndex = parts.findIndex(p => ['track', 'album', 'playlist'].includes(p));
+    if (typeIndex === -1) throw new Error('Invalid Spotify URL: Type not found');
+
+    const type = parts[typeIndex];
+    const potentialId = parts[typeIndex + 1];
+    if (!potentialId) throw new Error('Invalid Spotify URL: ID missing');
+
+    const id = potentialId.split('?')[0];
+
+    console.log(`[SpotifyService] Parsing URL: ${url}`);
+    console.log(`[SpotifyService] Extracted Type: ${type}, ID: ${id}`);
+
+    return executeWithRetry(async () => {
+        if (type === 'track') {
+            return { type: 'track', tracks: [{ id, url }] }; // Return formatted for ease
+        } else if (type === 'playlist') {
+            const data = await api.getPlaylist(id);
+            const playlist = data.body;
+
+            // Fetch all tracks with pagination
+            let tracks = [];
+            let offset = 0;
+            const limit = 100; // Spotify's max
+            const total = playlist.tracks.total;
+
+            // Get first page (already have it from getPlaylist)
+            tracks = playlist.tracks.items
+                .filter(item => item.track && item.track.id) // Filter out null/local tracks
+                .map(t => ({
+                    id: t.track.id,
+                    url: t.track.external_urls.spotify,
+                    name: t.track.name,
+                    artist: t.track.artists[0].name
+                }));
+
+            // Fetch remaining pages
+            offset = limit;
+            while (offset < total) {
+                console.log(`[SpotifyService] Fetching playlist tracks: ${offset}/${total}`);
+                const nextPage = await api.getPlaylistTracks(id, { offset, limit });
+                const nextTracks = nextPage.body.items
+                    .filter(item => item.track && item.track.id) // Filter out null/local tracks
+                    .map(t => ({
+                        id: t.track.id,
+                        url: t.track.external_urls.spotify,
+                        name: t.track.name,
+                        artist: t.track.artists[0].name
+                    }));
+                tracks = tracks.concat(nextTracks);
+                offset += limit;
+            }
+
+            console.log(`[SpotifyService] Fetched ${tracks.length} tracks from playlist "${playlist.name}"`);
+
+            return {
+                type: 'playlist',
+                title: playlist.name,
+                total: tracks.length, // Use actual fetched count
+                tracks
+            };
+        } else if (type === 'album') {
+            const data = await api.getAlbum(id);
+            const album = data.body;
+
+            // Fetch all tracks with pagination (rare for albums to exceed 100, but possible)
+            let tracks = [];
+            let offset = 0;
+            const limit = 50; // Spotify's max for album tracks
+            const total = album.tracks.total;
+
+            // Get first page (already have it from getAlbum)
+            tracks = album.tracks.items
+                .filter(t => t && t.id) // Filter out null tracks
+                .map(t => ({
+                    id: t.id,
+                    url: t.external_urls.spotify,
+                    name: t.name,
+                    artist: t.artists[0].name
+                }));
+
+            // Fetch remaining pages if needed
+            offset = limit;
+            while (offset < total) {
+                console.log(`[SpotifyService] Fetching album tracks: ${offset}/${total}`);
+                const nextPage = await api.getAlbumTracks(id, { offset, limit });
+                const nextTracks = nextPage.body.items
+                    .filter(t => t && t.id)
+                    .map(t => ({
+                        id: t.id,
+                        url: t.external_urls.spotify,
+                        name: t.name,
+                        artist: t.artists[0].name
+                    }));
+                tracks = tracks.concat(nextTracks);
+                offset += limit;
+            }
+
+            console.log(`[SpotifyService] Fetched ${tracks.length} tracks from album "${album.name}"`);
+
+            return {
+                type: 'album',
+                title: album.name,
+                total: tracks.length, // Use actual fetched count
+                tracks
+            };
+        }
+    });
+}
+
+module.exports = { getSpotifyData };

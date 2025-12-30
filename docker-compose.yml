@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # Backend API
+  api:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    container_name: soundry_api
+    ports:
+      - "3334:3001"
+    environment:
+      - PORT=3001
+      - DATABASE_URL=file:/app/data/soundry.db
+      - REDIS_URL=redis://redis:6379
+      - DOWNLOADS_DIR=/app/data/downloads
+      - NODE_ENV=production
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - soundry-net
+
+  # Worker Service
+  worker:
+    build:
+      context: .
+      dockerfile: packages/worker/Dockerfile
+    container_name: soundry_worker
+    environment:
+      - DATABASE_URL=file:/app/data/soundry.db
+      - REDIS_URL=redis://redis:6379
+      - DOWNLOADS_DIR=/app/data/downloads
+      - DOWNLOADS_DIR=/app/data/downloads
+      - NODE_ENV=production
+      # Credentials for SpotDL (Optional but recommended for rate limits)
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - soundry-net
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: packages/frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3334
+    container_name: soundry_frontend
+    ports:
+      - "3333:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3334
+      # Internal API URL for server-side fetches if needed, but client fetches go to localhost:3001
+      # In production this might be different (reverse proxy), but for MVP this is fine.
+    restart: unless-stopped
+    networks:
+      - soundry-net
+
+  # Redis for Queue
+  redis:
+    image: redis:alpine
+    container_name: soundry_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - soundry-net
+
+networks:
+  soundry-net:
+    driver: bridge
