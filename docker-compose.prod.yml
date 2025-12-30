@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # Backend API
+  api:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    environment:
+      - PORT=3001
+      - DATABASE_URL=file:/app/data/soundry.db
+      - REDIS_URL=redis://redis:6379
+      - DOWNLOADS_DIR=/app/data/downloads
+      - NODE_ENV=production
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+    volumes:
+      - soundry-data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - soundry-net
+    labels:
+      - "coolify.managed=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.soundry-api.rule=Host(`${API_DOMAIN:-api.soundry.local}`)"
+      - "traefik.http.routers.soundry-api.entrypoints=websecure"
+      - "traefik.http.routers.soundry-api.tls=true"
+      - "traefik.http.routers.soundry-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.soundry-api.loadbalancer.server.port=3001"
+
+  # Worker Service
+  worker:
+    build:
+      context: .
+      dockerfile: packages/worker/Dockerfile
+    environment:
+      - DATABASE_URL=file:/app/data/soundry.db
+      - REDIS_URL=redis://redis:6379
+      - DOWNLOADS_DIR=/app/data/downloads
+      - NODE_ENV=production
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+    volumes:
+      - soundry-data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - soundry-net
+    labels:
+      - "coolify.managed=true"
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: packages/frontend/Dockerfile
+      args:
+        # Use the API domain for client-side requests
+        NEXT_PUBLIC_API_URL: https://${API_DOMAIN:-api.soundry.local}
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://${API_DOMAIN:-api.soundry.local}
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - soundry-net
+    labels:
+      - "coolify.managed=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.soundry-frontend.rule=Host(`${FRONTEND_DOMAIN:-soundry.local}`)"
+      - "traefik.http.routers.soundry-frontend.entrypoints=websecure"
+      - "traefik.http.routers.soundry-frontend.tls=true"
+      - "traefik.http.routers.soundry-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.soundry-frontend.loadbalancer.server.port=3000"
+
+  # Redis for Queue
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - soundry-net
+    volumes:
+      - redis-data:/data
+    labels:
+      - "coolify.managed=true"
+
+networks:
+  soundry-net:
+    driver: bridge
+
+volumes:
+  soundry-data:
+    driver: local
+  redis-data:
+    driver: local
