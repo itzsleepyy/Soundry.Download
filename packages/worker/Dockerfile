@@ -27,4 +27,8 @@ ENV NODE_ENV production
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app .
 
-CMD ["node", "src/index.js"]
+# Copy startup script
+COPY packages/worker/start.sh ./start.sh
+RUN chmod +x ./start.sh
+
+CMD ["./start.sh"]
