@@ -8,6 +8,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Loader2, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
 import Typewriter from '../components/fancy/text/typewriter';
+import RecentTracksPreview from '../components/RecentTracksPreview';
+import Link from 'next/link';
 
 
 export default function Home() {
@@ -108,6 +110,15 @@ export default function Home() {
                     </Button>
                 </form>
 
+                <div className="flex justify-center">
+                    <Link
+                        href="/library?tab=global"
+                        className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors border-b border-transparent hover:border-muted-foreground/50 pb-0.5"
+                    >
+                        Or browse tracks already processed in the Global Library
+                    </Link>
+                </div>
+
                 <div className="space-y-4">
                     {error && (
                         <Alert variant="destructive">
@@ -119,8 +130,11 @@ export default function Home() {
 
                 {/* Minimal explainer / disclaimer */}
                 <div className="pt-8 border-t border-border/50">
+                    <div className="mb-6">
+                        <RecentTracksPreview />
+                    </div>
                     <p className="text-xs text-muted-foreground/70">
-                        Files are processed in approximately 30 seconds and are available for 24 hours.
+                        Tracks processed by other users remain available in the Global Library for 24 hours.
                     </p>
                 </div>
             </div>

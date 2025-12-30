@@ -14,7 +14,7 @@ sleep 10
 
 # Run Migrations (via worker or api container)
 echo "🔄 Running Database Migrations..."
-docker compose exec -T api npx prisma migrate dev --name init
+docker compose exec -T api npx prisma migrate deploy
 
 echo "✅ Deployment Complete!"
 echo "frontend: http://localhost:3333"

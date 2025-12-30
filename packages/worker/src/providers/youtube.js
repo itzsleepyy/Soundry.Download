@@ -5,7 +5,7 @@ async function getYoutubeMetadata(url) {
         const output = await ytDlp(url, {
             dumpSingleJson: true,
             noWarnings: true,
-            noCallHome: true,
+
             preferFreeFormats: true,
         });
 
@@ -28,7 +28,7 @@ async function downloadYoutube(url, outputPath) {
             audioFormat: 'best', // Download best quality then we transcode
             output: outputPath,
             noWarnings: true,
-            noCallHome: true,
+
         });
         return true;
     } catch (e) {

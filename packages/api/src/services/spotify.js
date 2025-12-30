@@ -78,36 +78,91 @@ async function getSpotifyData(url) {
         } else if (type === 'playlist') {
             const data = await api.getPlaylist(id);
             const playlist = data.body;
-            let tracks = playlist.tracks.items.map(t => ({
-                id: t.track.id,
-                url: t.track.external_urls.spotify,
-                name: t.track.name,
-                artist: t.track.artists[0].name
-            }));
 
-            // Handle pagination if needed? For MVP let's cap at first 100 (api default usually 100 with limit)
-            // api.getPlaylistTracks(id) can be used for more.
-            // Let's rely on standard response for now.
+            // Fetch all tracks with pagination
+            let tracks = [];
+            let offset = 0;
+            const limit = 100; // Spotify's max
+            const total = playlist.tracks.total;
+
+            // Get first page (already have it from getPlaylist)
+            tracks = playlist.tracks.items
+                .filter(item => item.track && item.track.id) // Filter out null/local tracks
+                .map(t => ({
+                    id: t.track.id,
+                    url: t.track.external_urls.spotify,
+                    name: t.track.name,
+                    artist: t.track.artists[0].name
+                }));
+
+            // Fetch remaining pages
+            offset = limit;
+            while (offset < total) {
+                console.log(`[SpotifyService] Fetching playlist tracks: ${offset}/${total}`);
+                const nextPage = await api.getPlaylistTracks(id, { offset, limit });
+                const nextTracks = nextPage.body.items
+                    .filter(item => item.track && item.track.id) // Filter out null/local tracks
+                    .map(t => ({
+                        id: t.track.id,
+                        url: t.track.external_urls.spotify,
+                        name: t.track.name,
+                        artist: t.track.artists[0].name
+                    }));
+                tracks = tracks.concat(nextTracks);
+                offset += limit;
+            }
+
+            console.log(`[SpotifyService] Fetched ${tracks.length} tracks from playlist "${playlist.name}"`);
 
             return {
                 type: 'playlist',
                 title: playlist.name,
-                total: playlist.tracks.total,
+                total: tracks.length, // Use actual fetched count
                 tracks
             };
         } else if (type === 'album') {
             const data = await api.getAlbum(id);
             const album = data.body;
-            let tracks = album.tracks.items.map(t => ({
-                id: t.id,
-                url: t.external_urls.spotify,
-                name: t.name,
-                artist: t.artists[0].name
-            }));
+
+            // Fetch all tracks with pagination (rare for albums to exceed 100, but possible)
+            let tracks = [];
+            let offset = 0;
+            const limit = 50; // Spotify's max for album tracks
+            const total = album.tracks.total;
+
+            // Get first page (already have it from getAlbum)
+            tracks = album.tracks.items
+                .filter(t => t && t.id) // Filter out null tracks
+                .map(t => ({
+                    id: t.id,
+                    url: t.external_urls.spotify,
+                    name: t.name,
+                    artist: t.artists[0].name
+                }));
+
+            // Fetch remaining pages if needed
+            offset = limit;
+            while (offset < total) {
+                console.log(`[SpotifyService] Fetching album tracks: ${offset}/${total}`);
+                const nextPage = await api.getAlbumTracks(id, { offset, limit });
+                const nextTracks = nextPage.body.items
+                    .filter(t => t && t.id)
+                    .map(t => ({
+                        id: t.id,
+                        url: t.external_urls.spotify,
+                        name: t.name,
+                        artist: t.artists[0].name
+                    }));
+                tracks = tracks.concat(nextTracks);
+                offset += limit;
+            }
+
+            console.log(`[SpotifyService] Fetched ${tracks.length} tracks from album "${album.name}"`);
+
             return {
                 type: 'album',
                 title: album.name,
-                total: album.tracks.total,
+                total: tracks.length, // Use actual fetched count
                 tracks
             };
         }

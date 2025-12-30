@@ -108,13 +108,47 @@ apiRouter.post('/jobs', async (req, res) => {
             });
         }
 
-        // Queue all
-        const jobs = await Promise.all(jobsToQueue.map(jobData =>
-            downloadQueue.add('download', {
+        // Queue all - create Track and SessionItem records first
+        const jobs = [];
+        for (const jobData of jobsToQueue) {
+            // Determine provider for Track record
+            let provider = 'youtube';
+            const jobUrl = jobData.url;
+            if (jobUrl.includes('spotify.com')) provider = 'spotify';
+            else if (jobUrl.includes('soundcloud.com')) provider = 'soundcloud';
+            else if (jobUrl.includes('youtube.com') || jobUrl.includes('youtu.be')) provider = 'youtube';
+
+            // Create Track record immediately in 'queued' status
+            const track = await prisma.track.create({
+                data: {
+                    provider: `${provider}:${jobUrl}`, // Temporary, worker will update with real provider ID
+                    title: jobData.meta?.title || 'Processing...',
+                    artist: jobData.meta?.artist || 'Unknown Artist',
+                    durationSeconds: 0,
+                    status: 'queued'
+                }
+            });
+
+            // Create SessionItem immediately
+            if (sessionToken) {
+                await prisma.sessionItem.create({
+                    data: {
+                        sessionToken,
+                        trackId: track.id,
+                        source: 'requested',
+                        groupId: jobData.groupId
+                    }
+                });
+            }
+
+            // Queue job with trackId
+            const job = await downloadQueue.add('download', {
                 ...jobData,
+                trackId: track.id,
                 requestId: require('uuid').v4()
-            })
-        ));
+            });
+            jobs.push(job);
+        }
 
         res.json({
             count: jobs.length,
@@ -158,7 +192,17 @@ apiRouter.get('/library/global', async (req, res) => {
             skip: offset
         });
 
-        res.json({ tracks });
+        const total = await prisma.track.count({ where });
+
+        res.json({
+            tracks,
+            pagination: {
+                page,
+                pageSize,
+                total,
+                totalPages: Math.ceil(total / pageSize)
+            }
+        });
     } catch (error) {
         console.error('Global library error:', error);
         res.status(500).json({ error: 'Internal Server Error' });
@@ -210,7 +254,8 @@ apiRouter.delete('/library/session/:id', async (req, res) => {
 
         // Verify ownership and existence
         const item = await prisma.sessionItem.findFirst({
-            where: { id, sessionToken }
+            where: { id, sessionToken },
+            include: { track: true }
         });
 
         if (!item) return res.status(404).json({ error: 'Item not found' });
@@ -219,9 +264,89 @@ apiRouter.delete('/library/session/:id', async (req, res) => {
             where: { id }
         });
 
+        // If track is not completed, mark as cancelled to stop worker
+        if (item.track && item.track.status !== 'completed' && item.track.status !== 'failed') {
+            await prisma.track.update({
+                where: { id: item.trackId },
+                data: { status: 'cancelled' }
+            });
+        }
+
         res.json({ status: 'deleted' });
     } catch (error) {
         console.error('Delete item error:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+// 3.2 POST /api/library/session/:id/retry
+apiRouter.post('/library/session/:id/retry', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const sessionToken = req.sessionToken;
+        if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
+
+        // Get the SessionItem and Track
+        const item = await prisma.sessionItem.findFirst({
+            where: { id, sessionToken },
+            include: { track: true }
+        });
+
+        if (!item) return res.status(404).json({ error: 'Item not found' });
+        if (item.track.status !== 'failed') {
+            return res.status(400).json({ error: 'Can only retry failed tracks' });
+        }
+
+        // Reconstruct URL from provider field (format: "provider:id")
+        const [providerType, providerId] = item.track.provider.split(':');
+        let url;
+
+        if (providerType === 'spotify') {
+            url = `https://open.spotify.com/track/${providerId}`;
+        } else if (providerType === 'youtube') {
+            url = `https://www.youtube.com/watch?v=${providerId}`;
+        } else {
+            return res.status(400).json({ error: 'Unsupported provider for retry' });
+        }
+
+        // Use default formats (mp3, flac, wav)
+        const formats = ['mp3', 'flac', 'wav'];
+
+        // Create new Track in queued status
+        const newTrack = await prisma.track.create({
+            data: {
+                provider: item.track.provider,
+                title: item.track.title,
+                artist: item.track.artist,
+                durationSeconds: 0,
+                status: 'queued'
+            }
+        });
+
+        // Update SessionItem to point to new track
+        await prisma.sessionItem.update({
+            where: { id },
+            data: { trackId: newTrack.id }
+        });
+
+        // Delete old failed track
+        await prisma.track.delete({
+            where: { id: item.trackId }
+        });
+
+        // Queue job
+        await downloadQueue.add('download', {
+            url,
+            formats,
+            sessionToken,
+            trackId: newTrack.id,
+            groupId: item.groupId,
+            requestId: require('uuid').v4()
+        });
+
+        res.json({ status: 'retrying', trackId: newTrack.id });
+    } catch (error) {
+        console.error('Retry error:', error);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });

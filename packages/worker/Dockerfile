@@ -2,6 +2,7 @@ FROM node:alpine AS base
 
 # Install ffmpeg, python3, openssl, and spotdl
 RUN apk add --no-cache ffmpeg python3 py3-pip openssl && \
+    pip install yt-dlp --upgrade --break-system-packages && \
     pip install spotdl --break-system-packages
 
 # Install dependencies only when needed

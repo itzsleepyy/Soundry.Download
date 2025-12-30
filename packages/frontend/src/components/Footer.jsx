@@ -14,10 +14,10 @@ export default function Footer() {
                     </ul>
                     <ul className="space-y-2">
                         <li className="hover:underline cursor-pointer group flex items-center justify-end gap-2">
-                            <a href="https://github.com/itzsleepyy/soundry" target="_blank" rel="noreferrer">Github</a> <Github className="w-4 h-4" />
+                            <a href="#" target="_blank" rel="noreferrer">Github</a> <Github className="w-4 h-4" />
                         </li>
                         <li className="hover:underline cursor-pointer group flex items-center justify-end gap-2">
-                            <a href="#" target="_blank" rel="noreferrer">Discord</a> <MessageSquare className="w-4 h-4" />
+                            <a href="https://discord.gg/heJSfWtZrP" target="_blank" rel="noreferrer">Discord</a> <MessageSquare className="w-4 h-4" />
                         </li>
                     </ul>
                 </div>
