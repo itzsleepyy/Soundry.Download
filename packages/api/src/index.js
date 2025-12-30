@@ -31,6 +31,16 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan('tiny'));
 
+// Log environment configuration at startup
+console.log('=== Soundry API Configuration ===');
+console.log('Port:', PORT);
+console.log('Redis URL:', REDIS_URL);
+console.log('Downloads Dir:', DOWNLOADS_DIR);
+console.log('Spotify Client ID:', process.env.SPOTIFY_CLIENT_ID ? `${process.env.SPOTIFY_CLIENT_ID.substring(0, 8)}...` : 'NOT SET');
+console.log('Spotify Client Secret:', process.env.SPOTIFY_CLIENT_SECRET ? 'SET (hidden)' : 'NOT SET');
+console.log('=================================');
+
+
 // --- Middleware ---
 const extractSession = (req, res, next) => {
     const token = req.headers['x-session-token'] || req.query.token;
