@@ -110,7 +110,10 @@ async function processJob(job, prisma) {
         }
 
         const filesCreated = [];
-        for (const format of formats) {
+        const supportedFormats = ['mp3', 'flac', 'wav'];
+        const activeFormats = formats.filter(f => supportedFormats.includes(f));
+
+        for (const format of activeFormats) {
             const relPath = `${track.id}/${format}.${format}`;
             const destPath = path.join(trackDir, `${format}.${format}`);
             console.log(`Transcoding to ${format}...`);

@@ -249,7 +249,7 @@ function SessionTable({ entries, onDelete }) {
     );
 }
 
-function SessionGroupRow({ groupEntry }) {
+function SessionGroupRow({ groupEntry, onDelete }) {
     const [expanded, setExpanded] = useState(false);
     const { groupData, items } = groupEntry;
 
@@ -314,7 +314,7 @@ function SessionGroupRow({ groupEntry }) {
 
 function GroupDownloadActions({ groupId, isDisabled }) {
     const [selectedFormat, setSelectedFormat] = useState('mp3');
-    const formats = ['mp3', 'flac', 'wav', 'opus', 'ogg'];
+    const formats = ['mp3', 'flac', 'wav'];
 
     if (isDisabled) return <span className="text-muted-foreground text-xs">-</span>;
 

@@ -7,12 +7,21 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Loader2, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
+import Typewriter from '../components/fancy/text/typewriter';
+
 
 export default function Home() {
     const [url, setUrl] = useState('');
+    const exampleUrls = [
+        "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+        "https://soundcloud.com/futureisnow/mask-off",
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+    ];
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const router = useRouter();
+
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -31,7 +40,7 @@ export default function Home() {
         try {
             const payload = {
                 url,
-                formats: ['mp3', 'flac', 'wav', 'opus', 'ogg']
+                formats: ['mp3', 'flac', 'wav']
             };
 
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/jobs`, {
@@ -73,15 +82,27 @@ export default function Home() {
                 </div>
 
                 <form onSubmit={handleSubmit} className="flex gap-3">
-                    <Input
-                        type="url"
-                        placeholder="Paste a link..."
-                        value={url}
-                        onChange={(e) => setUrl(e.target.value)}
-                        required
-                        className="flex-1 h-10"
-                        autoFocus
-                    />
+                    <div className="relative flex-1">
+                        <Input
+                            type="url"
+                            value={url}
+                            onChange={(e) => setUrl(e.target.value)}
+                            required
+                            className="w-full h-10 bg-background"
+                            autoFocus
+                        />
+                        {!url && (
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground text-sm opacity-50 truncate w-[90%] font-normal">
+                                <Typewriter
+                                    text={exampleUrls}
+                                    speed={50}
+                                    waitTime={2500}
+                                    loop={true}
+                                    cursorClassName="ml-0.5 opacity-50"
+                                />
+                            </div>
+                        )}
+                    </div>
                     <Button type="submit" disabled={loading} className="h-10 px-6">
                         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Get"}
                     </Button>
