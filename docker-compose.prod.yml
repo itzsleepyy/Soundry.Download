@@ -21,6 +21,7 @@ services:
     restart: unless-stopped
     networks:
       - soundry-net
+      - traefik-public
     labels:
       - "coolify.managed=true"
       - "traefik.enable=true"
@@ -49,11 +50,6 @@ services:
       # - YOUTUBE_COOKIE_2=${YOUTUBE_COOKIE_2}
     volumes:
       - soundry-data:/app/data
-    deploy:
-      mode: replicated
-      replicas: 5 # Start with 3 workers (30 concurrent jobs). Scale up/down as needed.
-      restart_policy:
-        condition: on-failure
     depends_on:
       - redis
     restart: unless-stopped
@@ -78,6 +74,7 @@ services:
     restart: unless-stopped
     networks:
       - soundry-net
+      - traefik-public
     labels:
       - "coolify.managed=true"
       - "traefik.enable=true"
@@ -101,6 +98,8 @@ services:
 networks:
   soundry-net:
     driver: bridge
+  traefik-public:
+    external: true
 
 volumes:
   soundry-data:
