@@ -1,0 +1,3 @@
+# Use docker-compose for Railway deployment
+services:
+  - docker-compose.prod.yml
