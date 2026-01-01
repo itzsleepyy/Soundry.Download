@@ -41,6 +41,7 @@ services:
       - DOWNLOADS_DIR=/app/data/downloads
       - COOKIES_DIR=/app/cookies
       - NODE_ENV=production
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-10}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
       # Optional: YouTube cookies for bot detection fallback

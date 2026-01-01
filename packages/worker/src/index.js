@@ -12,6 +12,9 @@ const redisConnection = new Redis(REDIS_URL, {
 
 console.log('Starting Soundry Worker...');
 
+const concurrency = parseInt(process.env.WORKER_CONCURRENCY) || 10;
+console.log(`Worker concurrency: ${concurrency} concurrent jobs`);
+
 const worker = new Worker('downloads', async (job) => {
     console.log(`Processing job ${job.id} for ${job.data.url}`);
 
@@ -24,7 +27,10 @@ const worker = new Worker('downloads', async (job) => {
 
     return await processJob(job, prisma);
 
-}, { connection: redisConnection, concurrency: 2 }); // Concurrency limit as per requirements
+}, {
+    connection: redisConnection,
+    concurrency: parseInt(process.env.WORKER_CONCURRENCY) || 10 // Configurable concurrency for I/O-bound tasks
+});
 
 worker.on('completed', (job) => {
     console.log(`Job ${job.id} completed!`);
