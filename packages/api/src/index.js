@@ -173,10 +173,15 @@ apiRouter.post('/jobs', async (req, res) => {
             }
 
             // Queue job with trackId
+            // Job Priorities:
+            // - Priority 1 (High): Single tracks. Ensures fast users don't wait for playlists.
+            // - Priority 5 (Low): Playlist tracks. Bulk downloads yield to single requests.
             const job = await downloadQueue.add('download', {
                 ...jobData,
                 trackId: track.id,
                 requestId: require('uuid').v4()
+            }, {
+                priority: jobData.groupId ? 5 : 1
             });
             jobs.push(job);
         }
