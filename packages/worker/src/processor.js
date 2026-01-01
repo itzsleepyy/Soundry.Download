@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { downloadYoutube, getYoutubeMetadata } = require('./providers/youtube');
 const { getSpotifyMetadata } = require('./providers/spotify');
+const { resolveYouTubeUrl, buildSearchQuery } = require('./services/youtubeResolver');
 const { transcodeFile } = require('./transcoder');
 const { v4: uuidv4 } = require('uuid');
 
@@ -67,10 +68,18 @@ async function processJob(job, prisma) {
             duration = Math.round(meta.duration || 0);
             providerId = meta.providerId;
 
-            // Construct Search Query for Audio Download
-            // "Artist - Title audio"
-            downloadUrl = `ytsearch1:${meta.artist} - ${meta.title} audio`;
-            console.log(`Resolved Spotify track to search query: ${downloadUrl}`);
+            // Resolve to direct YouTube URL using HTTP-based resolver
+            // This avoids yt-dlp's ytsearch which triggers bot detection
+            const searchQuery = buildSearchQuery(meta.artist, meta.title);
+            console.log(`[Resolver] Built search query: "${searchQuery}"`);
+
+            try {
+                downloadUrl = await resolveYouTubeUrl(searchQuery);
+                console.log(`[Resolver] Resolved to YouTube URL: ${downloadUrl}`);
+            } catch (resolverError) {
+                console.error(`[Resolver] Failed to resolve YouTube URL: ${resolverError.message}`);
+                throw new Error(`Could not find YouTube video for: ${meta.artist} - ${meta.title}`);
+            }
 
         } else if (provider === 'youtube') {
             const meta = await getYoutubeMetadata(url);

@@ -83,10 +83,25 @@ function LibraryContent() {
         router.push(`/library?tab=${val}`);
     };
 
+    const jsonLd = {
+        '@context': 'https://schema.org',
+        '@type': 'CollectionPage',
+        name: 'Soundry Global Library',
+        description: 'Browse recently downloaded audio tracks from Spotify, SoundCloud, and YouTube.',
+        url: 'https://soundry.download/library'
+    };
+
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
+            <script
+                type="application/ld+json"
+                dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+            />
+            <div className="flex flex-col gap-1">
                 <h1 className="text-lg font-semibold tracking-tight">Library</h1>
+                <p className="text-sm text-muted-foreground">
+                    Browse recent conversions from the community. Tracks are available for 24 hours.
+                </p>
             </div>
 
             <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">

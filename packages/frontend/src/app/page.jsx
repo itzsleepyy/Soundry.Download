@@ -73,8 +73,28 @@ export default function Home() {
         }
     };
 
+    const jsonLd = {
+        '@context': 'https://schema.org',
+        '@type': 'WebApplication',
+        name: 'Soundry',
+        url: 'https://soundry.download',
+        description: 'Download high-quality audio from Spotify, SoundCloud, and YouTube.',
+        applicationCategory: 'MultimediaApplication',
+        operatingSystem: 'Any',
+        offers: {
+            '@type': 'Offer',
+            price: '0',
+            priceCurrency: 'USD'
+        }
+    };
+
     return (
         <div className="max-w-2xl mx-auto mt-20 md:mt-32 px-2">
+            <script
+                type="application/ld+json"
+                dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+            />
+
             <div className="space-y-8">
                 <div className="space-y-2">
                     <h1 className="text-lg font-semibold tracking-tight">Request Audio</h1>
