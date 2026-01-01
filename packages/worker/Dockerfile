@@ -1,8 +1,19 @@
 FROM node:alpine AS base
 
-# Install ffmpeg, python3, openssl, and spotdl
-RUN apk add --no-cache ffmpeg python3 py3-pip openssl && \
-    pip install yt-dlp --upgrade --break-system-packages && \
+# Install system dependencies and tools for YouTube download fixes
+RUN apk add --no-cache \
+    ffmpeg \
+    python3 \
+    py3-pip \
+    openssl \
+    firefox-esr \
+    curl \
+    && \
+    # Install Deno for future yt-dlp requirement (late 2025)
+    curl -fsSL https://deno.land/install.sh | sh && \
+    mv /root/.deno/bin/deno /usr/local/bin/ && \
+    # Upgrade yt-dlp to latest version (critical for YouTube fixes)
+    pip install --upgrade yt-dlp --break-system-packages && \
     pip install spotdl --break-system-packages
 
 # Install dependencies only when needed
