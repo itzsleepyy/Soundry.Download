@@ -3,78 +3,69 @@
 ## ⚠️ SECURITY NOTICE
 **NEVER commit cookie files to Git!** They contain session tokens that could compromise your YouTube account.
 
-This directory is in `.gitignore` to prevent accidental commits.
-
 ## Purpose
-Cookies are used as a **fallback only** when YouTube bot detection occurs. The system works without them, but having cookies improves reliability.
+Cookies are used as a **fallback only** when YouTube bot detection occurs (HTTP 403). The system works without them, but having cookies improves reliability.
 
-## Setup
+## Setup via Environment Variables (Recommended for Production)
 
-### Option 1: Export from Browser
+### 1. Export Cookies from Browser
 
-1. Install browser extension:
-   - Firefox: "[cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)"
-   - Chrome: "[Get cookies.txt](https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid)"
+Install browser extension:
+- Firefox: "[cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)"
+- Chrome: "[Get cookies.txt](https://chrome.google.com/webstore/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid)"
 
-2. Go to YouTube.com (logged in)
+1. Go to YouTube.com (logged in)
+2. Export cookies to Netscape format
+3. **Copy the entire content** of the cookie file
 
-3. Export cookies to Netscape format
+### 2. Add to Environment Variables
 
-4. Save as `cookie-1.txt`, `cookie-2.txt`, etc.
-
-5. Place files in this directory:
-   ```bash
-   packages/worker/cookies/
-   ├── cookie-1.txt
-   ├── cookie-2.txt
-   └── .gitkeep
+**In Coolify:**
+1. Go to your application settings
+2. Add environment variables:
    ```
+   YOUTUBE_COOKIE_1=<paste entire cookie file content>
+   YOUTUBE_COOKIE_2=<optional: second cookie for rotation>
+   ```
+3. Redeploy
 
-### Option 2: Manual yt-dlp Export
-
+**In `.env` (local):**
 ```bash
-yt-dlp --cookies-from-browser firefox --cookies cookies.txt https://www.youtube.com/
+YOUTUBE_COOKIE_1="# Netscape HTTP Cookie File
+# This is a generated file! Do not edit.
+.youtube.com	TRUE	/	TRUE	1234567890	..."
 ```
 
-Then copy `cookies.txt` to this directory.
+The startup script automatically converts these to files at `/app/cookies/cookie-1.txt`, `/app/cookies/cookie-2.txt`, etc.
 
-## Deployment
+---
 
-### Local Development
-Files in this directory are mounted to `/app/cookies` in Docker.
+## Alternative: Manual File Setup (Local Development)
 
-### Production (Coolify/Server)
-1. SSH to server
-2. Access Docker container:
-   ```bash
-   docker exec -it soundry_worker bash
-   ```
-3. Create cookies:
-   ```bash
-   mkdir -p /app/cookies
-   vi /app/cookies/cookie-1.txt
-   # Paste cookie content and save
-   ```
+For local development, you can place cookie files directly:
 
-OR mount via volume:
 ```bash
-# On host
-mkdir -p /opt/soundry/cookies
-vi /opt/soundry/cookies/cookie-1.txt
-
-# Update docker-compose.prod.yml volume:
-- /opt/soundry/cookies:/app/cookies:ro
+packages/worker/cookies/
+├── cookie-1.txt
+├── cookie-2.txt
+└── .gitkeep
 ```
+
+These files are in `.gitignore` to prevent accidental commits.
+
+---
 
 ## Cookie Rotation
 The system automatically rotates through available cookie files if one encounters bot detection.
 
 ## Expiration
-YouTube cookies typically expire after ~6 months. Refresh when needed by re-exporting from browser.
+YouTube cookies typically expire after ~6 months. Refresh when needed by re-exporting from browser and updating the environment variable.
 
 ## Testing
 Check logs for:
 ```
+Writing cookie file from YOUTUBE_COOKIE_1...
+Created /app/cookies/cookie-1.txt
 [YouTube] Found 2 cookie file(s) available
 [YouTube] Using cookie file: cookie-1.txt
 ```
