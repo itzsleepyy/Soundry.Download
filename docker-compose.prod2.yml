@@ -45,11 +45,9 @@ services:
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-10}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
-      # Optional: YouTube cookies for bot detection fallback
-      # - YOUTUBE_COOKIE_1=${YOUTUBE_COOKIE_1}
-      # - YOUTUBE_COOKIE_2=${YOUTUBE_COOKIE_2}
     volumes:
       - soundry-data:/app/data
+      - ./cookies:/app/cookies:ro # Mount local cookies directory (read-only)
     depends_on:
       - redis
     restart: unless-stopped
