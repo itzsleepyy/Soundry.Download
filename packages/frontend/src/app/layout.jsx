@@ -50,6 +50,12 @@ export const metadata = {
         description: 'Download high-quality audio from Spotify, SoundCloud, and YouTube in MP3, FLAC, and WAV formats.',
         creator: '@soundry', // Placeholder
     },
+    icons: {
+        icon: [
+            { url: '/favicon.png', media: '(prefers-color-scheme: light)' },
+            { url: '/favicon-dark.png', media: '(prefers-color-scheme: dark)' },
+        ],
+    },
 };
 
 export default function RootLayout({ children }) {

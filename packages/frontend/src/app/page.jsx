@@ -96,12 +96,10 @@ export default function Home() {
             />
 
             <div className="space-y-8">
-                <div className="space-y-4">
-                    <h1 className="text-4xl md:text-5xl font-bold tracking-tighter bg-gradient-to-b from-foreground to-foreground/50 bg-clip-text text-transparent pb-1">
-                        Soundry
-                    </h1>
-                    <p className="text-muted-foreground text-lg font-light leading-relaxed">
-                        Soundry allows you to download audio from cloud music sources like Spotify, SoundCloud, and YouTube in MP3, WAV, and FLAC formats. Tracks processed by other users appear in the Global Library for instant download.
+                <div className="space-y-2">
+                    <h1 className="text-lg font-semibold tracking-tight">Request Audio</h1>
+                    <p className="text-sm text-muted-foreground">
+                        Paste a link from YouTube, SoundCloud, or Spotify.
                     </p>
                 </div>
 
