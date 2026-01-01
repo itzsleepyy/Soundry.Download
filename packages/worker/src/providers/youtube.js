@@ -1,63 +1,98 @@
+/**
+ * YouTube Download Provider
+ * 
+ * Handles audio extraction from YouTube using yt-dlp.
+ * Cookies are OPTIONAL and used ONLY as fallback when bot detection occurs.
+ * 
+ * Architecture:
+ * - Primary: Download without cookies using user-agent spoofing
+ * - Fallback: Retry with cookie files if available and bot detection occurs
+ * 
+ * This module handles DOWNLOADING ONLY, not search/resolution.
+ */
+
 const ytDlp = require('yt-dlp-exec');
-const os = require('os');
 const fs = require('fs');
 const path = require('path');
 
-// Detect available browsers for cookie extraction
-function detectBrowsers() {
-    const platform = os.platform();
-    const browsers = [];
+// Cookie directory - operator can place cookie files here
+const COOKIES_DIR = process.env.COOKIES_DIR || '/app/cookies';
 
-    // Check for Firefox (most reliable, doesn't require closing)
-    const firefoxPaths = [
-        '/root/.mozilla',
-        path.join(os.homedir(), '.mozilla'),
-        '/home/*/.mozilla'
-    ];
-
-    for (const firefoxPath of firefoxPaths) {
-        try {
-            if (fs.existsSync(firefoxPath)) {
-                browsers.push('firefox');
-                break;
-            }
-        } catch (e) {
-            // Ignore permission errors
+/**
+ * Get available cookie files from cookies directory
+ * @returns {string[]} Array of cookie file paths
+ */
+function getAvailableCookies() {
+    try {
+        if (!fs.existsSync(COOKIES_DIR)) {
+            return [];
         }
-    }
 
-    console.log(`[YouTube] Detected browsers: ${browsers.length > 0 ? browsers.join(', ') : 'none'}`);
-    return browsers;
+        const files = fs.readdirSync(COOKIES_DIR)
+            .filter(f => f.endsWith('.txt'))
+            .map(f => path.join(COOKIES_DIR, f));
+
+        if (files.length > 0) {
+            console.log(`[YouTube] Found ${files.length} cookie file(s) available`);
+        }
+
+        return files;
+    } catch (e) {
+        console.warn('[YouTube] Could not read cookies directory:', e.message);
+        return [];
+    }
 }
 
-// Build yt-dlp options with authentication
-function buildYtDlpOptions(baseOptions = {}) {
-    const options = { ...baseOptions };
+/**
+ * Build yt-dlp options for downloading
+ * @param {Object} baseOptions - Base options to merge
+ * @param {string|null} cookieFile - Optional cookie file path
+ * @returns {Object} Merged options
+ */
+function buildDownloadOptions(baseOptions = {}, cookieFile = null) {
+    const options = {
+        ...baseOptions,
+        // Always include these for reliability
+        noPlaylist: true,
+        referer: 'https://www.youtube.com/',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    };
 
-    // Try to use browser cookies (most reliable method)
-    const browsers = detectBrowsers();
-    if (browsers.length > 0) {
-        options.cookiesFromBrowser = browsers[0];
-        console.log(`[YouTube] Using cookies from ${browsers[0]}`);
-    } else {
-        console.warn('[YouTube] No browser cookies available - may encounter bot detection');
+    if (cookieFile) {
+        options.cookies = cookieFile;
+        console.log(`[YouTube] Using cookie file: ${path.basename(cookieFile)}`);
     }
-
-    // Add user-agent spoofing to appear as real browser
-    options.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
     return options;
 }
 
+/**
+ * Check if error indicates bot detection
+ * @param {Error} error - Error to check
+ * @returns {boolean} True if bot detection error
+ */
+function isBotDetectionError(error) {
+    const msg = error?.message || '';
+    return msg.includes('Sign in to confirm') ||
+        msg.includes('not a bot') ||
+        msg.includes('HTTP Error 429');
+}
+
+/**
+ * Get YouTube video metadata
+ * @param {string} url - Direct YouTube video URL (not search query)
+ * @returns {Promise<Object>} Video metadata
+ */
 async function getYoutubeMetadata(url) {
+    console.log(`[YouTube] Fetching metadata for: ${url}`);
+
     try {
-        const options = buildYtDlpOptions({
+        const options = buildDownloadOptions({
             dumpSingleJson: true,
             noWarnings: true,
             preferFreeFormats: true,
         });
 
-        console.log('[YouTube] Fetching metadata with authentication');
         const output = await ytDlp(url, options);
 
         return {
@@ -67,60 +102,101 @@ async function getYoutubeMetadata(url) {
             providerId: output.id
         };
     } catch (e) {
-        console.error('[YouTube] Metadata Error:', e.message);
-
-        // Check for bot detection
-        if (e.message.includes('Sign in to confirm') || e.message.includes('not a bot')) {
-            console.error('[YouTube] Bot detection triggered - cookies may be needed');
-        }
-
+        console.error('[YouTube] Metadata fetch failed:', e.message);
         throw e;
     }
 }
 
+/**
+ * Download audio from YouTube URL
+ * 
+ * Strategy:
+ * 1. Try download without cookies
+ * 2. If bot detection occurs and cookies available, retry with cookies
+ * 3. Rotate through cookie files on subsequent failures
+ * 
+ * @param {string} url - Direct YouTube video URL
+ * @param {string} outputPath - Path to save audio file
+ * @returns {Promise<boolean>} True on success
+ */
 async function downloadYoutube(url, outputPath) {
-    const maxRetries = 3;
-    let lastError;
+    console.log(`[YouTube] Starting download: ${url}`);
+    console.log(`[YouTube] Output path: ${outputPath}`);
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const cookieFiles = getAvailableCookies();
+    const maxAttempts = 1 + cookieFiles.length; // Base attempt + one per cookie file
+
+    let lastError = null;
+
+    // Attempt 1: Without cookies
+    console.log('[YouTube] Attempt 1: Downloading without cookies');
+    try {
+        const options = buildDownloadOptions({
+            extractAudio: true,
+            audioFormat: 'best',
+            output: outputPath,
+            noWarnings: true,
+        });
+
+        await ytDlp(url, options);
+        console.log('[YouTube] Download successful (no cookies needed)');
+        return true;
+
+    } catch (error) {
+        lastError = error;
+        console.error('[YouTube] Download failed:', error.message);
+
+        if (!isBotDetectionError(error)) {
+            // Non-bot error, don't retry with cookies
+            throw error;
+        }
+
+        console.log('[YouTube] Bot detection triggered');
+
+        if (cookieFiles.length === 0) {
+            console.error('[YouTube] No cookie files available for fallback');
+            throw new Error('YouTube bot detection: No cookies available for fallback');
+        }
+    }
+
+    // Attempts 2+: With cookie files
+    for (let i = 0; i < cookieFiles.length; i++) {
+        const cookieFile = cookieFiles[i];
+        const attemptNum = i + 2;
+
+        console.log(`[YouTube] Attempt ${attemptNum}: Retrying with cookies`);
+
         try {
-            const options = buildYtDlpOptions({
+            const options = buildDownloadOptions({
                 extractAudio: true,
                 audioFormat: 'best',
                 output: outputPath,
                 noWarnings: true,
-            });
+            }, cookieFile);
 
-            console.log(`[YouTube] Download attempt ${attempt}/${maxRetries}`);
             await ytDlp(url, options);
-            console.log('[YouTube] Download successful');
+            console.log(`[YouTube] Download successful (with cookies: ${path.basename(cookieFile)})`);
             return true;
-        } catch (e) {
-            lastError = e;
-            console.error(`[YouTube] Download attempt ${attempt} failed:`, e.message);
 
-            // Check if it's a bot detection error
-            if (e.message.includes('Sign in to confirm') || e.message.includes('not a bot')) {
-                console.error('[YouTube] Bot detection triggered');
-                console.error('[YouTube] Tip: Ensure Firefox is installed with valid cookies');
-            }
+        } catch (error) {
+            lastError = error;
+            console.error(`[YouTube] Cookie attempt ${attemptNum} failed:`, error.message);
 
-            // Retry with exponential backoff (unless last attempt)
-            if (attempt < maxRetries) {
-                const delay = Math.min(attempt * 2000, 10000); // Cap at 10s
-                console.log(`[YouTube] Retrying in ${delay}ms...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
+            if (isBotDetectionError(error) && i < cookieFiles.length - 1) {
+                console.log('[YouTube] Bot detection persists, rotating to next cookie file');
+                continue;
             }
         }
     }
 
-    // All retries failed
+    // All attempts failed
     const errorMsg = lastError?.message || 'Unknown error';
-    if (errorMsg.includes('Sign in to confirm') || errorMsg.includes('not a bot')) {
-        throw new Error('YouTube bot detection: Please ensure browser cookies are available. See https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp');
-    }
+    console.error(`[YouTube] All ${maxAttempts} attempts failed`);
 
-    throw new Error(`YouTube download failed after ${maxRetries} attempts: ${errorMsg}`);
+    throw new Error(`YouTube download failed after ${maxAttempts} attempts: ${errorMsg}`);
 }
 
-module.exports = { getYoutubeMetadata, downloadYoutube };
+module.exports = {
+    getYoutubeMetadata,
+    downloadYoutube
+};

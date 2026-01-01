@@ -39,11 +39,13 @@ services:
       - DATABASE_URL=file:/app/data/soundry.db
       - REDIS_URL=redis://redis:6379
       - DOWNLOADS_DIR=/app/data/downloads
+      - COOKIES_DIR=/app/cookies
       - NODE_ENV=production
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
     volumes:
       - soundry-data:/app/data
+      - ./packages/worker/cookies:/app/cookies:ro
     depends_on:
       - redis
     restart: unless-stopped
