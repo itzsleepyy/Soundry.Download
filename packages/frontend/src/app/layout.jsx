@@ -1,4 +1,3 @@
-'use client';
 import './globals.css';
 import SessionInit from '../components/SessionInit';
 import Link from 'next/link';
@@ -6,6 +5,52 @@ import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
 
 import Footer from '../components/Footer';
+
+export const metadata = {
+    metadataBase: new URL('https://soundry.download'),
+    title: {
+        default: 'Soundry | Free Spotify, SoundCloud & YouTube Audio Downloader',
+        template: '%s | Soundry'
+    },
+    description: 'Download high-quality audio from Spotify, SoundCloud, and YouTube in MP3, FLAC, and WAV formats. No ads, free, and fast.',
+    keywords: ['spotify downloader', 'spotify to mp3', 'soundcloud downloader', 'youtube to mp3', 'audio converter', 'lossless audio', 'flac downloader'],
+    authors: [{ name: 'Soundry' }],
+    creator: 'Soundry',
+    publisher: 'Soundry',
+    robots: {
+        index: true,
+        follow: true,
+        googleBot: {
+            index: true,
+            follow: true,
+            'max-video-preview': -1,
+            'max-image-preview': 'large',
+            'max-snippet': -1,
+        },
+    },
+    openGraph: {
+        type: 'website',
+        locale: 'en_US',
+        url: 'https://soundry.download',
+        siteName: 'Soundry',
+        title: 'Soundry | Free Spotify, SoundCloud & YouTube Audio Downloader',
+        description: 'Download high-quality audio from Spotify, SoundCloud, and YouTube in MP3, FLAC, and WAV formats.',
+        images: [
+            {
+                url: '/og-image.jpg', // Recommend user to add this later
+                width: 1200,
+                height: 630,
+                alt: 'Soundry Audio Downloader',
+            },
+        ],
+    },
+    twitter: {
+        card: 'summary_large_image',
+        title: 'Soundry | Free Spotify, SoundCloud & YouTube Audio Downloader',
+        description: 'Download high-quality audio from Spotify, SoundCloud, and YouTube in MP3, FLAC, and WAV formats.',
+        creator: '@soundry', // Placeholder
+    },
+};
 
 export default function RootLayout({ children }) {
     return (

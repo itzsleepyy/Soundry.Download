@@ -73,13 +73,35 @@ export default function Home() {
         }
     };
 
+    const jsonLd = {
+        '@context': 'https://schema.org',
+        '@type': 'WebApplication',
+        name: 'Soundry',
+        url: 'https://soundry.download',
+        description: 'Download high-quality audio from Spotify, SoundCloud, and YouTube.',
+        applicationCategory: 'MultimediaApplication',
+        operatingSystem: 'Any',
+        offers: {
+            '@type': 'Offer',
+            price: '0',
+            priceCurrency: 'USD'
+        }
+    };
+
     return (
         <div className="max-w-2xl mx-auto mt-20 md:mt-32 px-2">
+            <script
+                type="application/ld+json"
+                dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+            />
+
             <div className="space-y-8">
-                <div className="space-y-2">
-                    <h1 className="text-lg font-semibold tracking-tight">Request Audio</h1>
-                    <p className="text-sm text-muted-foreground">
-                        Paste a link from YouTube, SoundCloud, or Spotify.
+                <div className="space-y-4">
+                    <h1 className="text-4xl md:text-5xl font-bold tracking-tighter bg-gradient-to-b from-foreground to-foreground/50 bg-clip-text text-transparent pb-1">
+                        Soundry
+                    </h1>
+                    <p className="text-muted-foreground text-lg font-light leading-relaxed">
+                        Soundry allows you to download audio from cloud music sources like Spotify, SoundCloud, and YouTube in MP3, WAV, and FLAC formats. Tracks processed by other users appear in the Global Library for instant download.
                     </p>
                 </div>
 
