@@ -10,3 +10,5 @@ build
 !/data/downloads/.keep
 /data/*.db
 /data/*.db-journal
+# Ignore YouTube cookies for security
+packages/worker/cookies/*.txt
