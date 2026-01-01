@@ -21,6 +21,7 @@ services:
     restart: unless-stopped
     networks:
       - soundry-net
+      - traefik-public
     labels:
       - "coolify.managed=true"
       - "traefik.enable=true"
@@ -73,6 +74,7 @@ services:
     restart: unless-stopped
     networks:
       - soundry-net
+      - traefik-public
     labels:
       - "coolify.managed=true"
       - "traefik.enable=true"
@@ -96,6 +98,8 @@ services:
 networks:
   soundry-net:
     driver: bridge
+  traefik-public:
+    external: true
 
 volumes:
   soundry-data:
