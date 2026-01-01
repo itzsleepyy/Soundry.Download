@@ -75,7 +75,8 @@ function isBotDetectionError(error) {
     const msg = error?.message || '';
     return msg.includes('Sign in to confirm') ||
         msg.includes('not a bot') ||
-        msg.includes('HTTP Error 429');
+        msg.includes('HTTP Error 429') ||
+        msg.includes('HTTP Error 403'); // YouTube blocks video downloads with 403
 }
 
 /**
