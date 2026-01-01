@@ -47,7 +47,7 @@ services:
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
     volumes:
       - soundry-data:/app/data
-      - ./cookies:/app/cookies:ro # Mount local cookies directory (read-only)
+      - ./cookies:/app/cookies # Mount as read-write (yt-dlp needs to update cookies)
     depends_on:
       - redis
     restart: unless-stopped
