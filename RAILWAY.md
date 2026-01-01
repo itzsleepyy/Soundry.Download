@@ -1,24 +1,31 @@
 # Railway Deployment Guide for Soundry
 
-## Important: Docker Compose Deployment
+## Important: Docker Compose on Railway
 
-Railway will use `docker-compose.prod.yml` to deploy all services together. This ensures:
-- All services are configured correctly
-- Environment variables are shared
-- Worker scaling is supported
+Railway's docker-compose support works differently than standard deployment:
+- Each service in docker-compose becomes a **separate Railway service**
+- The `.railway.yml` file maps services from docker-compose
+- You'll have 4 services: API, Worker, Frontend, Redis
 
-## Quick Start (5 minutes)
+## Quick Start (10 minutes)
 
-### 1. Sign Up & Connect GitHub
+### 1. Push Code to GitHub
+```bash
+git add -A
+git commit -m "Railway configuration"
+git push origin main
+```
+
+### 2. Create Railway Project
 1. Go to [railway.app](https://railway.app)
-2. Click "Start a New Project"
+2. Click "New Project"
 3. Choose "Deploy from GitHub repo"
-4. Select your `Soundry.Download` repository
-5. Railway will detect `docker-compose.prod.yml` automatically
+4. Select `Soundry.Download`
+5. **Important**: Railway will create 4 separate services from your docker-compose
 
-### 2. Configure Project
+### 3. Configure Each Service
 
-Railway will create services from your docker-compose file:
+Railway will create these services automatically:
 
 #### Service 1: Redis
 - **Type**: Database → Redis
