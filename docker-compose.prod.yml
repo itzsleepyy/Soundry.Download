@@ -49,6 +49,11 @@ services:
       # - YOUTUBE_COOKIE_2=${YOUTUBE_COOKIE_2}
     volumes:
       - soundry-data:/app/data
+    deploy:
+      mode: replicated
+      replicas: 5 # Start with 3 workers (30 concurrent jobs). Scale up/down as needed.
+      restart_policy:
+        condition: on-failure
     depends_on:
       - redis
     restart: unless-stopped
