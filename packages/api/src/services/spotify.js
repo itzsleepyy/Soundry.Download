@@ -23,12 +23,21 @@ async function ensureToken() {
 
     if (now >= tokenExpirationTime - 300000) {
         try {
+            console.log('[Spotify] Requesting access token...');
+            console.log('[Spotify] Client ID (first 10):', process.env.SPOTIFY_CLIENT_ID?.substring(0, 10));
+            console.log('[Spotify] Client ID length:', process.env.SPOTIFY_CLIENT_ID?.length);
+            console.log('[Spotify] Client Secret length:', process.env.SPOTIFY_CLIENT_SECRET?.length);
+
             const data = await api.clientCredentialsGrant();
             api.setAccessToken(data.body['access_token']);
             tokenExpirationTime = now + (data.body['expires_in'] * 1000);
-            console.log('Spotify access token refreshed (API)');
+            console.log('[Spotify] Access token refreshed successfully');
         } catch (error) {
-            console.error('Failed to retrieve Spotify access token', error);
+            console.error('[Spotify] Failed to retrieve access token');
+            console.error('[Spotify] Error status:', error.statusCode);
+            console.error('[Spotify] Error message:', error.message);
+            console.error('[Spotify] Error body:', JSON.stringify(error.body || {}));
+            console.error('[Spotify] Full error:', error);
             throw error;
         }
     }
