@@ -2,7 +2,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import useSWR from 'swr';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { getSessionToken } from '../../components/SessionInit';
+import { getSessionToken } from '@/components/SessionInit';
 import { Loader2, Download, ExternalLink, SearchIcon, ChevronDown, ChevronRight, Archive, FolderArchive, Trash2, XCircle, RefreshCw } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -92,48 +92,50 @@ function LibraryContent() {
     };
 
     return (
-        <div className="space-y-6">
-            <script
-                type="application/ld+json"
-                dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-            />
-            <div className="flex flex-col gap-1">
-                <h1 className="text-lg font-semibold tracking-tight">Library</h1>
-                <p className="text-sm text-muted-foreground">
-                    Browse recent conversions from the community. Tracks are available for 24 hours.
-                </p>
-            </div>
-
-            <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-                <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                    <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
-                        <TabsTrigger value="global">Global Stream</TabsTrigger>
-                        <TabsTrigger value="session">My Session</TabsTrigger>
-                    </TabsList>
-
-                    <div className="w-full md:w-auto">
-                        <ButtonGroup>
-                            <Input
-                                type="search"
-                                placeholder="Search..."
-                                value={query}
-                                onChange={(e) => setQuery(e.target.value)}
-                                className="h-9 w-full md:w-[250px]"
-                            />
-                            <Button variant="outline" size="icon" className="h-9 w-9 px-0" aria-label="Search">
-                                <SearchIcon className="h-4 w-4" />
-                            </Button>
-                        </ButtonGroup>
-                    </div>
+        <div className="max-w-5xl mx-auto">
+            <div className="space-y-6">
+                <script
+                    type="application/ld+json"
+                    dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+                />
+                <div className="flex flex-col gap-1">
+                    <h1 className="text-lg font-semibold tracking-tight">Library</h1>
+                    <p className="text-sm text-muted-foreground">
+                        Browse recent conversions from the community. Tracks are available for 24 hours.
+                    </p>
                 </div>
 
-                <TabsContent value="global" className="mt-6">
-                    <GlobalLibrary query={query} />
-                </TabsContent>
-                <TabsContent value="session" className="mt-6">
-                    <SessionLibrary query={query} />
-                </TabsContent>
-            </Tabs>
+                <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
+                            <TabsTrigger value="global">Global Stream</TabsTrigger>
+                            <TabsTrigger value="session">My Session</TabsTrigger>
+                        </TabsList>
+
+                        <div className="w-full md:w-auto">
+                            <ButtonGroup>
+                                <Input
+                                    type="search"
+                                    placeholder="Search..."
+                                    value={query}
+                                    onChange={(e) => setQuery(e.target.value)}
+                                    className="h-9 w-full md:w-[250px]"
+                                />
+                                <Button variant="outline" size="icon" className="h-9 w-9 px-0" aria-label="Search">
+                                    <SearchIcon className="h-4 w-4" />
+                                </Button>
+                            </ButtonGroup>
+                        </div>
+                    </div>
+
+                    <TabsContent value="global" className="mt-6">
+                        <GlobalLibrary query={query} />
+                    </TabsContent>
+                    <TabsContent value="session" className="mt-6">
+                        <SessionLibrary query={query} />
+                    </TabsContent>
+                </Tabs>
+            </div>
         </div>
     );
 }

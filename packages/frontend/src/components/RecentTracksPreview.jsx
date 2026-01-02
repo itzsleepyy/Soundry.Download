@@ -15,8 +15,8 @@ export default function RecentTracksPreview() {
                 const res = await fetch(`${apiUrl}/api/library/global`);
                 if (res.ok) {
                     const data = await res.json();
-                    // Take first 3 tracks
-                    setRecentTracks((data.tracks || []).slice(0, 3));
+                    // Take up to 30 tracks to allow for scrolling
+                    setRecentTracks((data.tracks || []).slice(0, 30));
                 }
             } catch (error) {
                 console.error("Failed to fetch recent tracks", error);
@@ -32,7 +32,7 @@ export default function RecentTracksPreview() {
     if (recentTracks.length === 0) return <div className="text-xs text-muted-foreground">No recent tracks yet.</div>;
 
     return (
-        <div className="space-y-3">
+        <div className="max-h-[calc(100vh-12rem)] overflow-y-auto pr-2 -mr-2 scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent pb-8">
             <div className="space-y-1">
                 {recentTracks.map((item) => (
                     <div key={item.id} className="flex items-center justify-between group py-1 text-sm text-foreground/80 hover:text-foreground transition-colors">
