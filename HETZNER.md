@@ -265,7 +265,7 @@ docker compose -f docker-compose.prod.yml restart
 # Update code
 cd /opt/soundry
 git pull
-docker compose -f docker-compose.prod.yml up -d --build --scale worker=5
+  docker compose -f docker-compose.prod.yml up -d --build --scale worker=5
 
 # Check disk space
 df -h
