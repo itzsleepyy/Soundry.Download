@@ -3,6 +3,7 @@ import SessionInit from '../components/SessionInit';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
+import AnnouncementBanner from '@/components/AnnouncementBanner';
 
 import Footer from '../components/Footer';
 
@@ -68,6 +69,7 @@ export default function RootLayout({ children }) {
           `}</style>
             </head>
             <body className="min-h-screen bg-black font-sans antialiased text-foreground selection:bg-primary/20">
+                <AnnouncementBanner />
                 <SessionInit />
 
                 {/* Main Content Wrapper - Relative z-10 to cover sticky footer */}

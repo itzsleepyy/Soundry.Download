@@ -47,6 +47,10 @@ USER nextjs
 
 EXPOSE 3000
 
-ENV PORT 3000
+ENV EXPOSE 3000
+
+# Set hostname to 0.0.0.0 so Traefik can access the container
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 
 CMD ["node", "server.js"]

@@ -30,18 +30,26 @@ services:
     build:
       context: .
       dockerfile: packages/worker/Dockerfile
-    container_name: soundry_worker
+    # container_name: soundry_worker # Removed to allow replicas
     environment:
       - DATABASE_URL=file:/app/data/soundry.db
       - REDIS_URL=redis://redis:6379
       - DOWNLOADS_DIR=/app/data/downloads
-      - DOWNLOADS_DIR=/app/data/downloads
+      - COOKIES_DIR=/app/cookies
       - NODE_ENV=production
-      # Credentials for SpotDL (Optional but recommended for rate limits)
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-10}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      # Optional: YouTube cookies for bot detection fallback
+      # - YOUTUBE_COOKIE_1=${YOUTUBE_COOKIE_1}
+      # - YOUTUBE_COOKIE_2=${YOUTUBE_COOKIE_2}
     volumes:
       - ./data:/app/data
+    deploy:
+      mode: replicated
+      replicas: 3 # Start with 3 workers (30 concurrent jobs)
+      restart_policy:
+        condition: on-failure
     depends_on:
       - redis
     restart: unless-stopped
