@@ -1,14 +1,14 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getSessionToken } from '../components/SessionInit';
+import { getSessionToken } from '@/components/SessionInit';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Loader2, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
-import Typewriter from '../components/fancy/text/typewriter';
-import RecentTracksPreview from '../components/RecentTracksPreview';
+import Typewriter from '@/components/fancy/text/typewriter';
+import RecentTracksPreview from '@/components/RecentTracksPreview';
 import Link from 'next/link';
 
 

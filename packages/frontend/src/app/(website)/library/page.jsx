@@ -2,7 +2,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import useSWR from 'swr';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { getSessionToken } from '../../components/SessionInit';
+import { getSessionToken } from '@/components/SessionInit';
 import { Loader2, Download, ExternalLink, SearchIcon, ChevronDown, ChevronRight, Archive, FolderArchive, Trash2, XCircle, RefreshCw } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
