@@ -89,74 +89,93 @@ export default function Home() {
     };
 
     return (
-        <div className="max-w-2xl mx-auto mt-20 md:mt-32 px-2">
-            <script
-                type="application/ld+json"
-                dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-            />
+        <div className="max-w-7xl mx-auto">
+            <div className="flex justify-between items-start gap-16 mt-8 px-8">
+                <script
+                    type="application/ld+json"
+                    dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+                />
 
-            <div className="space-y-8">
-                <div className="space-y-2">
-                    <h1 className="text-lg font-semibold tracking-tight">Request Audio</h1>
-                    <p className="text-sm text-muted-foreground">
-                        Paste a link from YouTube, SoundCloud, or Spotify.
-                    </p>
-                </div>
+                {/* Main Content - Left Column */}
+                <div className="max-w-2xl w-full space-y-8">
+                    <div className="space-y-2">
+                        <h1 className="text-lg font-semibold tracking-tight">Request Audio</h1>
+                        <p className="text-sm text-muted-foreground">
+                            Paste a link from YouTube, SoundCloud, or Spotify.
+                        </p>
+                    </div>
 
-                <form onSubmit={handleSubmit} className="flex gap-3">
-                    <div className="relative flex-1">
-                        <Input
-                            type="url"
-                            value={url}
-                            onChange={(e) => setUrl(e.target.value)}
-                            required
-                            className="w-full h-10 bg-background"
-                            autoFocus
-                        />
-                        {!url && (
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground text-sm opacity-50 truncate w-[90%] font-normal">
-                                <Typewriter
-                                    text={exampleUrls}
-                                    speed={50}
-                                    waitTime={2500}
-                                    loop={true}
-                                    cursorClassName="ml-0.5 opacity-50"
-                                />
-                            </div>
+                    <form onSubmit={handleSubmit} className="flex gap-3">
+                        <div className="relative flex-1">
+                            <Input
+                                type="url"
+                                value={url}
+                                onChange={(e) => setUrl(e.target.value)}
+                                required
+                                className="w-full h-10 bg-background"
+                                autoFocus
+                            />
+                            {!url && (
+                                <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground text-sm opacity-50 truncate w-[90%] font-normal">
+                                    <Typewriter
+                                        text={exampleUrls}
+                                        speed={50}
+                                        waitTime={2500}
+                                        loop={true}
+                                        cursorClassName="ml-0.5 opacity-50"
+                                    />
+                                </div>
+                            )}
+                        </div>
+                        <Button type="submit" disabled={loading} className="h-10 px-6">
+                            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Get"}
+                        </Button>
+                    </form>
+
+                    <div className="flex justify-center">
+                        <Link
+                            href="/library?tab=global"
+                            className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors border-b border-transparent hover:border-muted-foreground/50 pb-0.5"
+                        >
+                            Or browse tracks already processed in the Global Library
+                        </Link>
+                    </div>
+
+                    <div className="space-y-4">
+                        {error && (
+                            <Alert variant="destructive">
+                                <AlertTitle>Error</AlertTitle>
+                                <AlertDescription>{error}</AlertDescription>
+                            </Alert>
                         )}
                     </div>
-                    <Button type="submit" disabled={loading} className="h-10 px-6">
-                        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Get"}
-                    </Button>
-                </form>
 
-                <div className="flex justify-center">
-                    <Link
-                        href="/library?tab=global"
-                        className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors border-b border-transparent hover:border-muted-foreground/50 pb-0.5"
-                    >
-                        Or browse tracks already processed in the Global Library
-                    </Link>
+                    {/* SEO Content */}
+                    <div className="pt-8 border-t border-border/50 space-y-6">
+                        <p className="text-sm text-muted-foreground leading-relaxed">
+                            Soundry lets you download high-quality audio from <span className="text-foreground font-medium">Spotify</span>, <span className="text-foreground font-medium">SoundCloud</span>, and <span className="text-foreground font-medium">YouTube</span> in MP3, WAV, and FLAC formats. Tracks are processed rapidly and available for 24 hours.
+                        </p>
+
+                        <div className="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
+                            <ul className="space-y-1.5 list-disc pl-4 marker:text-primary/50">
+                                <li>Download Spotify tracks to MP3, WAV, FLAC</li>
+                                <li>Access audio from SoundCloud and YouTube</li>
+                            </ul>
+                            <ul className="space-y-1.5 list-disc pl-4 marker:text-primary/50">
+                                <li>Files expire automatically after 24h</li>
+                                <li>Instant downloads from Global Library</li>
+                            </ul>
+                        </div>
+                    </div>
                 </div>
 
-                <div className="space-y-4">
-                    {error && (
-                        <Alert variant="destructive">
-                            <AlertTitle>Error</AlertTitle>
-                            <AlertDescription>{error}</AlertDescription>
-                        </Alert>
-                    )}
-                </div>
-
-                {/* Minimal explainer / disclaimer */}
-                <div className="pt-8 border-t border-border/50">
-                    <div className="mb-6">
+                {/* Right Column - Recent Downloads (hidden on mobile) */}
+                <aside className="hidden lg:block w-80 shrink-0 h-[calc(100vh-8rem)]">
+                    <div className="sticky top-24 h-full flex flex-col">
+                        <h2 className="text-xs font-medium text-muted-foreground mb-4 uppercase tracking-wider">Recent Downloads</h2>
                         <RecentTracksPreview />
                     </div>
-                    <p className="text-xs text-muted-foreground/70">
-                        Tracks processed by other users remain available in the Global Library for 24 hours.
-                    </p>
-                </div>
+                </aside>
             </div>
         </div>
     )

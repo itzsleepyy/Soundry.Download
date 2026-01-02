@@ -12,8 +12,8 @@ export const metadata = {
         default: 'Soundry | Free Spotify, SoundCloud & YouTube Audio Downloader',
         template: '%s | Soundry'
     },
-    description: 'Download high-quality audio from Spotify, SoundCloud, and YouTube in MP3, FLAC, and WAV formats. No ads, free, and fast.',
-    keywords: ['spotify downloader', 'spotify to mp3', 'soundcloud downloader', 'youtube to mp3', 'audio converter', 'lossless audio', 'flac downloader'],
+    description: 'Soundry is a free audio downloader for Spotify, SoundCloud, and YouTube. Convert links to high-quality MP3, FLAC, and WAV files instantly.',
+    keywords: ['spotify downloader', 'spotify to mp3', 'soundcloud downloader', 'youtube to mp3', 'audio converter', 'flac downloader', 'youtube music downloader', 'spotify playlist downloader'],
     authors: [{ name: 'Soundry' }],
     creator: 'Soundry',
     publisher: 'Soundry',
@@ -58,9 +58,48 @@ export const metadata = {
     },
 };
 
+import Script from 'next/script';
+
 export default function RootLayout({ children }) {
     return (
         <html lang="en" className="dark">
+            <Script id="json-ld-layout" strategy="beforeInteractive">
+                {`
+          {
+            "@context": "https://schema.org",
+            "@graph": [
+              {
+                "@type": "WebSite",
+                "name": "Soundry",
+                "url": "https://soundry.download",
+                "potentialAction": {
+                  "@type": "SearchAction",
+                  "target": "https://soundry.download/library?q={search_term_string}",
+                  "query-input": "required name=search_term_string"
+                }
+              },
+              {
+                "@type": "Organization",
+                "name": "Soundry",
+                "url": "https://soundry.download",
+                "logo": "https://soundry.download/favicon.png",
+                "sameAs": []
+              }
+            ]
+          }
+        `}
+            </Script>
+            <Script src="https://www.googletagmanager.com/gtag/js?id=G-DMZBHNT9SL" strategy="afterInteractive" />
+            <Script id="google-analytics" strategy="afterInteractive">
+                {`
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+
+          gtag('config', 'G-DMZBHNT9SL');
+        `}
+            </Script>
+            {/* Force Inter font loading if relying on Google Fonts or System fonts */}
             <head>
                 <style>{`
             :root { --font-inter: 'Inter', system-ui, sans-serif; }

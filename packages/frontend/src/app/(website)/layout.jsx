@@ -9,7 +9,7 @@ export default function WebsiteLayout({ children }) {
             <AnnouncementBanner />
             <div className="relative z-10 bg-background min-h-screen shadow-2xl border-b border-border/50 flex flex-col">
                 <header className="border-b border-border/50 sticky top-0 bg-background/95 backdrop-blur z-50">
-                    <div className="flex h-14 items-center px-4 md:px-8 max-w-5xl mx-auto justify-between">
+                    <div className="flex h-14 items-center px-8 max-w-7xl mx-auto justify-between">
                         <div className="flex items-center gap-6">
                             <Link href="/" className="font-semibold text-sm tracking-tight hover:text-primary/80 transition-colors">
                                 Soundry
@@ -27,7 +27,7 @@ export default function WebsiteLayout({ children }) {
                     </div>
                 </header>
 
-                <main className="max-w-5xl w-full mx-auto p-4 md:p-8 flex-1">
+                <main className="w-full mx-auto p-4 md:p-8 flex-1">
                     {children}
                 </main>
 

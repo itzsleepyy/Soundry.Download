@@ -10,9 +10,7 @@ export default function DocsPage() {
 
             <div className="space-y-4 text-lg leading-relaxed">
                 <p>
-                    Soundry is a specialized tool designed to bridge the gap between streaming services and personal audio libraries.
-                    It allows you to download high-quality audio from Spotify tracks and playlists by matching them to the best available
-                    source on YouTube.
+                    Soundry helps you convert cloud music links to audio formats. When a link is requested, Soundry processes it and makes the track available temporarily. You can download individual tracks or explore the Global Library.
                 </p>
 
                 <h2 className="text-2xl font-semibold mt-8 mb-4">Who is Soundry for?</h2>
