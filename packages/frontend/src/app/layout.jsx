@@ -59,9 +59,21 @@ export const metadata = {
     },
 };
 
+import Script from 'next/script';
+
 export default function RootLayout({ children }) {
     return (
         <html lang="en" className="dark">
+            <Script src="https://www.googletagmanager.com/gtag/js?id=G-DMZBHNT9SL" strategy="afterInteractive" />
+            <Script id="google-analytics" strategy="afterInteractive">
+                {`
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+
+          gtag('config', 'G-DMZBHNT9SL');
+        `}
+            </Script>
             {/* Force Inter font loading if relying on Google Fonts or System fonts */}
             <head>
                 <style>{`
