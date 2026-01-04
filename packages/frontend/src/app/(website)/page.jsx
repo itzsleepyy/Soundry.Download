@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import Typewriter from '@/components/fancy/text/typewriter';
 import RecentTracksPreview from '@/components/RecentTracksPreview';
 import Link from 'next/link';
+import { trackDownloadRequest } from '@/lib/gtag';
 
 
 export default function Home() {
@@ -58,6 +59,8 @@ export default function Home() {
                 const data = await res.json();
                 throw new Error(data.error || 'Failed to submit job');
             }
+
+            trackDownloadRequest();
 
             toast.success("Request received", {
                 description: "Your audio is being processed."
