@@ -257,15 +257,15 @@ docker ps | grep worker
 
 ```bash
 # View logs
-docker compose -f docker-compose.prod.yml logs -f worker
+docker compose -f docker-compose.prod2.yml logs -f worker
 
 # Restart all services
-docker compose -f docker-compose.prod.yml restart
+docker compose -f docker-compose.prod2.yml restart
 
 # Update code
 cd /opt/soundry
 git pull
-  docker compose -f docker-compose.prod.yml up -d --build --scale worker=5
+  docker compose -f docker-compose.prod2.yml up -d --build --scale worker=5
 
 # Check disk space
 df -h

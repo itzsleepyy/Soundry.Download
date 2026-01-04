@@ -51,7 +51,7 @@ services:
     command: ./start.sh
     volumes:
       - soundry-data:/app/data
-      - ./cookies:/app/cookies # Mount as read-write (yt-dlp needs to update cookies)
+      - ../cookies:/app/cookies # Mount external cookies directory (outside repo)
     depends_on:
       - redis
     restart: unless-stopped
