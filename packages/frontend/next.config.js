@@ -18,6 +18,15 @@ const nextConfig = {
             },
         ]
     },
+    async redirects() {
+        return [
+            {
+                source: '/',
+                destination: '/status',
+                permanent: false, // Temporary redirect while we fix issues
+            },
+        ]
+    },
 }
 
 module.exports = nextConfig

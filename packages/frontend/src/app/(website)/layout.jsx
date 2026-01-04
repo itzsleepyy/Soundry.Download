@@ -1,12 +1,10 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import AnnouncementBanner from '@/components/AnnouncementBanner';
 import Footer from '@/components/Footer';
 
 export default function WebsiteLayout({ children }) {
     return (
         <>
-            <AnnouncementBanner />
             <div className="relative z-10 bg-background min-h-screen shadow-2xl border-b border-border/50 flex flex-col">
                 <header className="border-b border-border/50 sticky top-0 bg-background/95 backdrop-blur z-50">
                     <div className="flex h-14 items-center px-8 max-w-7xl mx-auto justify-between">
