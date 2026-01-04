@@ -19,8 +19,8 @@ const path = require('path');
 const COOKIES_DIR = process.env.COOKIES_DIR || '/app/cookies';
 
 /**
- * Get available cookie files from cookies directory
- * @returns {string[]} Array of cookie file paths
+ * Get available cookie files from cookies directory and shuffle them
+ * @returns {string[]} Array of shuffled cookie file paths
  */
 function getAvailableCookies() {
     try {
@@ -36,11 +36,26 @@ function getAvailableCookies() {
             console.log(`[YouTube] Found ${files.length} cookie file(s) available`);
         }
 
-        return files;
+        // Shuffle cookies to distribute load randomly
+        return shuffleArray(files);
     } catch (e) {
         console.warn('[YouTube] Could not read cookies directory:', e.message);
         return [];
     }
+}
+
+/**
+ * Shuffle array in place (Fisher-Yates algorithm)
+ * @param {Array} array - Array to shuffle
+ * @returns {Array} Shuffled array
+ */
+function shuffleArray(array) {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
 }
 
 /**
@@ -161,6 +176,8 @@ async function downloadYoutube(url, outputPath) {
     const cookieFiles = getAvailableCookies();
     const maxAttempts = 1 + cookieFiles.length; // Base attempt + one per cookie file
 
+    // Track failed cookies to avoid retries within this job
+    const failedCookies = new Set();
     let lastError = null;
 
     // Attempt 1: Without cookies
@@ -190,12 +207,12 @@ async function downloadYoutube(url, outputPath) {
         console.log('[YouTube] Bot detection triggered');
 
         if (cookieFiles.length === 0) {
-            console.error('[YouTube] No cookie files available for fallback');
-            throw new Error('YouTube bot detection: No cookies available for fallback');
+            console.error('[YouTube] CRITICAL: No cookie files found in /app/cookies');
+            throw new Error('YouTube bot detection: No cookies available for fallback. Please add valid cookie files to /app/cookies on the server.');
         }
     }
 
-    // Attempts 2+: With cookie files
+    // Attempts 2+: With cookie files (randomized order)
     for (let i = 0; i < cookieFiles.length; i++) {
         const cookieFile = cookieFiles[i];
         const attemptNum = i + 2;
@@ -217,11 +234,26 @@ async function downloadYoutube(url, outputPath) {
 
         } catch (error) {
             lastError = error;
+            const cookieName = path.basename(cookieFile);
+
+            // Check if invalid format error
+            if (error.message.includes('does not look like a Netscape format')) {
+                failedCookies.add(cookieName);
+                console.error(`[YouTube] INVALID COOKIE FORMAT: ${cookieName} - Skipping`);
+                continue;
+            }
+
             console.error(`[YouTube] Cookie attempt ${attemptNum} failed:`, error.message);
 
-            if (isBotDetectionError(error) && i < cookieFiles.length - 1) {
-                console.log('[YouTube] Bot detection persists, rotating to next cookie file');
-                continue;
+            if (isBotDetectionError(error)) {
+                failedCookies.add(cookieName);
+                if (i < cookieFiles.length - 1) {
+                    console.log('[YouTube] Bot detection persists, rotating to next cookie file');
+                    continue;
+                }
+            } else {
+                // Non-bot error, don't continue
+                throw error;
             }
         }
     }
@@ -229,6 +261,11 @@ async function downloadYoutube(url, outputPath) {
     // All attempts failed
     const errorMsg = lastError?.message || 'Unknown error';
     console.error(`[YouTube] All ${maxAttempts} attempts failed`);
+
+    if (failedCookies.size === cookieFiles.length) {
+        console.error('[YouTube] CRITICAL: All available cookies are exhausted or blocked');
+        throw new Error(`All available YouTube cookies (${cookieFiles.length}) are exhausted or blocked. Please refresh cookies on the server.`);
+    }
 
     throw new Error(`YouTube download failed after ${maxAttempts} attempts: ${errorMsg}`);
 }
