@@ -87,6 +87,12 @@ function isBotDetectionError(error) {
 async function getYoutubeMetadata(url) {
     console.log(`[YouTube] Fetching metadata for: ${url}`);
 
+    // Retry logic similar to downloadYoutube
+    const cookieFiles = getAvailableCookies();
+    const maxAttempts = 1 + cookieFiles.length;
+    let lastError = null;
+
+    // Attempt 1: Without cookies
     try {
         const options = buildDownloadOptions({
             dumpSingleJson: true,
@@ -95,17 +101,45 @@ async function getYoutubeMetadata(url) {
         });
 
         const output = await ytDlp(url, options);
-
         return {
             title: output.title,
             artist: output.uploader || output.artist || 'Unknown Artist',
             duration: output.duration,
             providerId: output.id
         };
-    } catch (e) {
-        console.error('[YouTube] Metadata fetch failed:', e.message);
-        throw e;
+    } catch (error) {
+        lastError = error;
+        if (!isBotDetectionError(error)) throw error;
+        console.log('[YouTube] Metadata bot detection triggered');
+        if (cookieFiles.length === 0) throw error;
     }
+
+    // Attempts 2+: With cookie files
+    for (const cookieFile of cookieFiles) {
+        console.log(`[YouTube] Retrying metadata with cookie: ${path.basename(cookieFile)}`);
+        try {
+            const options = buildDownloadOptions({
+                dumpSingleJson: true,
+                noWarnings: true,
+                preferFreeFormats: true,
+            }, cookieFile);
+
+            const output = await ytDlp(url, options);
+            return {
+                title: output.title,
+                artist: output.uploader || output.artist || 'Unknown Artist',
+                duration: output.duration,
+                providerId: output.id
+            };
+        } catch (error) {
+            lastError = error;
+            if (isBotDetectionError(error)) continue;
+            throw error;
+        }
+    }
+
+    console.error('[YouTube] Metadata fetch failed after all attempts');
+    throw lastError;
 }
 
 /**
@@ -137,6 +171,7 @@ async function downloadYoutube(url, outputPath) {
             audioFormat: 'best',
             output: outputPath,
             noWarnings: true,
+            ignoreErrors: true, // Prevent failure on skipped fragments
         });
 
         await ytDlp(url, options);
@@ -173,6 +208,7 @@ async function downloadYoutube(url, outputPath) {
                 audioFormat: 'best',
                 output: outputPath,
                 noWarnings: true,
+                ignoreErrors: true, // Prevent failure on skipped fragments
             }, cookieFile);
 
             await ytDlp(url, options);

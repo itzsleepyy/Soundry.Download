@@ -9,6 +9,13 @@ const { getSpotifyData } = require('./services/spotify');
 const path = require('path');
 const fs = require('fs');
 
+// Handle BigInt serialization for JSON (Prisma returns BigInt for mapped Int columns)
+BigInt.prototype.toJSON = function () {
+    const int = Number.parseInt(this.toString());
+    return int ?? this.toString();
+};
+
+
 // --- Configuration ---
 const PORT = process.env.PORT || 3001;
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';

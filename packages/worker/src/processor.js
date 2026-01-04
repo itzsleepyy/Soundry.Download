@@ -81,7 +81,7 @@ async function processJob(job, prisma) {
                 throw new Error(`Could not find YouTube video for: ${meta.artist} - ${meta.title}`);
             }
 
-        } else if (provider === 'youtube') {
+        } else if (provider === 'youtube' || provider === 'soundcloud') {
             const meta = await getYoutubeMetadata(url);
             if (meta) {
                 title = meta.title;
@@ -93,6 +93,7 @@ async function processJob(job, prisma) {
     } catch (e) {
         console.warn('Metadata fetch failed, creating placeholder track or failing if critical', e);
         // For Spotify, metadata fetch is critical to get the search query.
+        if (provider === 'spotify') throw e;
         if (provider === 'spotify') throw e;
     }
 
@@ -194,6 +195,11 @@ async function processJob(job, prisma) {
 
     // 3. Download & Transcode
     try {
+        // Enforce Duration Limit (15 mins) - Check here so we can update DB on failure
+        if (duration > 900) {
+            throw new Error('Due to recent abuse, we have temporarily limited tracks to 15 minutes. We hope to lift this soon.');
+        }
+
         // We always use a consistent source name for intermediate file
         // downloadYoutube uses yt-dlp which handles container detection, but we force output path.
         // We'll use .webm as a generic container wrapper for downloadYoutube's output if possible,

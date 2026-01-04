@@ -32,7 +32,7 @@ model File {
   track     Track  @relation(fields: [trackId], references: [id], onDelete: Cascade)
   format    String // mp3, wav, flac
   path      String // Relative to storage root
-  sizeBytes Int
+  sizeBytes BigInt
   checksum  String?
 }
 
