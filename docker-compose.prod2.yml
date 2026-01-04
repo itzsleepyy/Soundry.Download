@@ -106,5 +106,9 @@ networks:
 volumes:
   soundry-data:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/soundry-data
   redis-data:
     driver: local
