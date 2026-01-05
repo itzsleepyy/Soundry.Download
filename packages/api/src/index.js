@@ -6,6 +6,7 @@ const { Queue } = require('bullmq');
 const Redis = require('ioredis');
 const archiver = require('archiver');
 const { getSpotifyData } = require('./services/spotify');
+const QueueDispatcher = require('./services/queueDispatcher');
 const path = require('path');
 const fs = require('fs');
 
@@ -29,7 +30,26 @@ const redisConnection = new Redis(REDIS_URL, {
     maxRetriesPerRequest: null,
 });
 
+// Redis Subscriber for Dispatch Events
+const redisSubscriber = new Redis(REDIS_URL);
+
 const downloadQueue = new Queue('downloads', { connection: redisConnection });
+
+// Initialize Dispatcher
+const dispatcher = new QueueDispatcher(prisma, downloadQueue);
+
+// Listen for dispatch events from Worker
+redisSubscriber.subscribe('soundry:dispatch', (err) => {
+    if (err) console.error('Failed to subscribe to dispatch channel', err);
+    else console.log('Subscribed to soundry:dispatch events');
+});
+
+redisSubscriber.on('message', (channel, message) => {
+    if (channel === 'soundry:dispatch') {
+        dispatcher.dispatch();
+    }
+});
+
 
 // --- Express Setup ---
 const app = express();
@@ -46,26 +66,11 @@ console.log('Downloads Dir:', DOWNLOADS_DIR);
 
 // Detailed Spotify credentials logging
 const clientId = process.env.SPOTIFY_CLIENT_ID;
-const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
-
 if (clientId) {
-    console.log('Spotify Client ID:', `${clientId.substring(0, 8)}...${clientId.substring(clientId.length - 4)}`);
-    console.log('  - Length:', clientId.length);
-    console.log('  - First char code:', clientId.charCodeAt(0));
-    console.log('  - Last char code:', clientId.charCodeAt(clientId.length - 1));
+    console.log('Spotify Client ID:', `${clientId.substring(0, 8)}...`);
 } else {
     console.log('Spotify Client ID: NOT SET');
 }
-
-if (clientSecret) {
-    console.log('Spotify Client Secret: SET (hidden)');
-    console.log('  - Length:', clientSecret.length);
-    console.log('  - First char code:', clientSecret.charCodeAt(0));
-    console.log('  - Last char code:', clientSecret.charCodeAt(clientSecret.length - 1));
-} else {
-    console.log('Spotify Client Secret: NOT SET');
-}
-
 console.log('=================================');
 
 
@@ -106,7 +111,6 @@ apiRouter.post('/jobs', async (req, res) => {
                 const data = await getSpotifyData(url);
                 if (data.type === 'playlist' || data.type === 'album') {
                     // Create Session Group
-                    // Use actual tracks length to avoid mismatch with Spotify's total which might include local/unplayable files
                     const group = await prisma.sessionGroup.create({
                         data: {
                             sessionToken,
@@ -146,20 +150,18 @@ apiRouter.post('/jobs', async (req, res) => {
             });
         }
 
-        // Queue all - create Track and SessionItem records first
+        // Queue all - create Track and SessionItem records
         const jobs = [];
         for (const jobData of jobsToQueue) {
-            // Determine provider for Track record
             let provider = 'youtube';
             const jobUrl = jobData.url;
             if (jobUrl.includes('spotify.com')) provider = 'spotify';
             else if (jobUrl.includes('soundcloud.com')) provider = 'soundcloud';
             else if (jobUrl.includes('youtube.com') || jobUrl.includes('youtu.be')) provider = 'youtube';
 
-            // Create Track record immediately in 'queued' status
             const track = await prisma.track.create({
                 data: {
-                    provider: `${provider}:${jobUrl}`, // Temporary, worker will update with real provider ID
+                    provider: `${provider}:${jobUrl}`,
                     title: jobData.meta?.title || 'Processing...',
                     artist: jobData.meta?.artist || 'Unknown Artist',
                     durationSeconds: 0,
@@ -167,7 +169,6 @@ apiRouter.post('/jobs', async (req, res) => {
                 }
             });
 
-            // Create SessionItem immediately
             if (sessionToken) {
                 await prisma.sessionItem.create({
                     data: {
@@ -179,24 +180,13 @@ apiRouter.post('/jobs', async (req, res) => {
                 });
             }
 
-            // Queue job with trackId
-            // Job Priorities:
-            // - Priority 1 (High): Single tracks. Ensures fast users don't wait for playlists.
-            // - Priority 5 (Low): Playlist tracks. Bulk downloads yield to single requests.
-            const job = await downloadQueue.add('download', {
-                ...jobData,
-                trackId: track.id,
-                requestId: require('uuid').v4()
-            }, {
-                priority: jobData.groupId ? 5 : 1,
-                attempts: 5,
-                backoff: {
-                    type: 'exponential',
-                    delay: 2000
-                }
-            });
-            jobs.push(job);
+            // NOTE: We do NOT add to downloadQueue here anymore.
+            // Dispatcher will pick it up.
+            jobs.push(track.id);
         }
+
+        // Trigger Dispatch
+        dispatcher.dispatch();
 
         res.json({
             count: jobs.length,
@@ -320,6 +310,9 @@ apiRouter.delete('/library/session/:id', async (req, res) => {
             });
         }
 
+        // Trigger dispatch to fill slot?
+        dispatcher.dispatch();
+
         res.json({ status: 'deleted' });
     } catch (error) {
         console.error('Delete item error:', error);
@@ -345,7 +338,6 @@ apiRouter.post('/library/session/:id/retry', async (req, res) => {
             return res.status(400).json({ error: 'Can only retry failed tracks' });
         }
 
-        // Reconstruct URL from provider field (format: "provider:id")
         const [providerType, providerId] = item.track.provider.split(':');
         let url;
 
@@ -357,7 +349,6 @@ apiRouter.post('/library/session/:id/retry', async (req, res) => {
             return res.status(400).json({ error: 'Unsupported provider for retry' });
         }
 
-        // Use default formats (mp3, flac, wav)
         const formats = ['mp3', 'flac', 'wav'];
 
         // Create new Track in queued status
@@ -382,21 +373,8 @@ apiRouter.post('/library/session/:id/retry', async (req, res) => {
             where: { id: item.trackId }
         });
 
-        // Queue job
-        await downloadQueue.add('download', {
-            url,
-            formats,
-            sessionToken,
-            trackId: newTrack.id,
-            groupId: item.groupId,
-            requestId: require('uuid').v4()
-        }, {
-            attempts: 5,
-            backoff: {
-                type: 'exponential',
-                delay: 2000
-            }
-        });
+        // Trigger Dispatch
+        dispatcher.dispatch();
 
         res.json({ status: 'retrying', trackId: newTrack.id });
     } catch (error) {
@@ -405,7 +383,7 @@ apiRouter.post('/library/session/:id/retry', async (req, res) => {
     }
 });
 
-// 4. GET /api/download/:trackId/:format
+// 4. GET /api/download/:trackId/:format (Unchanged)
 apiRouter.get('/download/:trackId/:format', async (req, res) => {
     try {
         const { trackId, format } = req.params;
@@ -417,7 +395,6 @@ apiRouter.get('/download/:trackId/:format', async (req, res) => {
         });
 
         if (!track) return res.status(404).json({ error: 'Track not found' });
-        // Simplified expire check
         if (track.expiresAt && new Date() > track.expiresAt) res.status(410).json({ error: 'Track expired' });
 
         const file = track.files.find(f => f.format === format);
@@ -441,7 +418,7 @@ apiRouter.get('/download/:trackId/:format', async (req, res) => {
     }
 });
 
-// 5. GET /api/download-group/:groupId
+// 5. GET /api/download-group/:groupId (Unchanged)
 apiRouter.get('/download-group/:groupId', async (req, res) => {
     try {
         const { groupId } = req.params;
@@ -483,6 +460,59 @@ apiRouter.get('/download-group/:groupId', async (req, res) => {
     } catch (error) {
         console.error('Group download error:', error);
         res.status(500).end();
+    }
+});
+
+// ==========================================
+// NEW: Pause / Resume Groups
+// ==========================================
+
+apiRouter.post('/library/group/:id/pause', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const sessionToken = req.sessionToken;
+        if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
+
+        const group = await prisma.sessionGroup.findFirst({
+            where: { id, sessionToken }
+        });
+
+        if (!group) return res.status(404).json({ error: 'Group not found' });
+
+        await prisma.sessionGroup.update({
+            where: { id },
+            data: { paused: true }
+        });
+
+        res.json({ status: 'paused' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+apiRouter.post('/library/group/:id/resume', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const sessionToken = req.sessionToken;
+        if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
+
+        const group = await prisma.sessionGroup.findFirst({
+            where: { id, sessionToken }
+        });
+
+        if (!group) return res.status(404).json({ error: 'Group not found' });
+
+        await prisma.sessionGroup.update({
+            where: { id },
+            data: { paused: false }
+        });
+
+        // Trigger dispatch incase slots are open
+        dispatcher.dispatch();
+
+        res.json({ status: 'resumed' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 

@@ -3,7 +3,8 @@
  * 
  * Handles audio extraction from YouTube using yt-dlp.
  * Refactored for STABILIZATION:
- * - Single retry layer (BullMQ + yt-dlp internal), no application-level retry loops.
+ * - Uses SessionPool for sticky sessions and cooldowns.
+ * - Single retry layer (BullMQ Backoff + Internal yt-dlp retries).
  * - Global concurrency limiting via RateLimiter.
  * - Structured logging.
  */
@@ -11,7 +12,7 @@
 const ytDlp = require('yt-dlp-exec');
 const fs = require('fs');
 const path = require('path');
-const proxyManager = require('../services/proxyManager');
+const sessionPool = require('../services/sessionPool');
 const rateLimiter = require('../services/rateLimiter');
 const { performance } = require('perf_hooks');
 
@@ -46,11 +47,10 @@ function buildDownloadOptions(baseOptions = {}, cookiePath = null, proxyUrl = nu
         referer: 'https://www.youtube.com/',
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
 
-        // Android client to avoid some 403s and format issues
+        // Android client to avoid some 403s and formation issues
         extractorArgs: 'youtube:player_client=android',
 
         // Internal yt-dlp retries (Network/Fragment level ONLY)
-        // We do NOT restart the whole process here, only small packet retries
         extractorRetries: 3,
         retries: 10,
         fragmentRetries: 10,
@@ -75,35 +75,42 @@ function buildDownloadOptions(baseOptions = {}, cookiePath = null, proxyUrl = nu
     return options;
 }
 
+function sanitizeUrl(url) {
+    if (!url) return 'none';
+    try {
+        return new URL(url).host;
+    } catch {
+        return 'invalid';
+    }
+}
+
 /**
  * Get YouTube video metadata
- * Single attempt with rate limiting.
+ * Uses SessionPool for identity.
  */
 async function getYoutubeMetadata(url, logger = null) {
     const startTime = performance.now();
 
-    // Acquire slot
+    // Acquire slot in Global Rate Limit
     return await rateLimiter.run('METADATA', async () => {
-        // Get one proxy/cookie pair
-        const { proxy, cookie } = proxyManager.getDownloadPair();
-
-        const proxyUrl = proxy ? proxy.url : null;
-        const cookiePath = cookie ? cookie.path : null;
-
+        let session = null;
         try {
-            console.log(`[YouTube] Fetching metadata for ${url} (Proxy: ${proxy ? proxyManager.sanitizeProxyUrl(proxyUrl) : 'Direct'})`);
+            // Acquire Session (Cookie+Proxy)
+            session = await sessionPool.acquire();
+
+            console.log(`[YouTube] Fetching metadata for ${url} (Session: ${session.id})`);
 
             const options = buildDownloadOptions({
                 dumpSingleJson: true,
                 noWarnings: true,
                 preferFreeFormats: true,
-            }, cookiePath, proxyUrl);
+            }, session.cookiePath, session.proxyUrl);
 
             const output = await ytDlp(url, options);
 
             // Success
-            if (proxy) proxyManager.markProxySuccess(proxy.index);
-            logEvent(logger, 'metadata', 1, 'success', startTime, { providerId: output.id });
+            sessionPool.release(session.id, true);
+            logEvent(logger, 'metadata', 1, 'success', startTime, { providerId: output.id, session: session.id });
 
             return {
                 title: output.title,
@@ -113,13 +120,18 @@ async function getYoutubeMetadata(url, logger = null) {
             };
 
         } catch (error) {
-            // Log failure
-            const isRateLimit = error.message.includes('429') || error.message.includes('Sign in');
-            if (isRateLimit && proxy) {
-                proxyManager.markProxyFailure(proxy.index, '429');
+            // Log failure & Release Session with error
+            const errMsg = error.message || '';
+            let errorType = 'other';
+            if (errMsg.includes('429')) errorType = '429';
+            else if (errMsg.includes('403')) errorType = '403';
+            else if (errMsg.includes('Sign in') || errMsg.includes('captcha')) errorType = 'captcha';
+
+            if (session) {
+                sessionPool.release(session.id, false, errorType);
             }
 
-            logEvent(logger, 'metadata', 1, 'failure', startTime, { error: error.message });
+            logEvent(logger, 'metadata', 1, 'failure', startTime, { error: errMsg, errorType });
             throw error;
         }
     });
@@ -127,18 +139,16 @@ async function getYoutubeMetadata(url, logger = null) {
 
 /**
  * Download audio from YouTube URL
- * Single attempt with rate limiting.
+ * Uses SessionPool for identity.
  */
 async function downloadYoutube(url, outputPath, logger = null) {
     const startTime = performance.now();
 
     return await rateLimiter.run('DOWNLOAD', async () => {
-        const { proxy, cookie } = proxyManager.getDownloadPair();
-        const proxyUrl = proxy ? proxy.url : null;
-        const cookiePath = cookie ? cookie.path : null;
-
+        let session = null;
         try {
-            console.log(`[YouTube] Starting download for ${url} (Proxy: ${proxy ? proxyManager.sanitizeProxyUrl(proxyUrl) : 'Direct'})`);
+            session = await sessionPool.acquire();
+            console.log(`[YouTube] Starting download for ${url} (Session: ${session.id})`);
 
             const options = buildDownloadOptions({
                 extractAudio: true,
@@ -146,22 +156,27 @@ async function downloadYoutube(url, outputPath, logger = null) {
                 output: outputPath,
                 noWarnings: true,
                 ignoreErrors: true,
-            }, cookiePath, proxyUrl);
+            }, session.cookiePath, session.proxyUrl);
 
             await ytDlp(url, options);
 
             // Success
-            if (proxy) proxyManager.markProxySuccess(proxy.index);
-            logEvent(logger, 'download', 1, 'success', startTime);
+            sessionPool.release(session.id, true);
+            logEvent(logger, 'download', 1, 'success', startTime, { session: session.id });
             return true;
 
         } catch (error) {
-            const isRateLimit = error.message.includes('429') || error.message.includes('Sign in');
-            if (isRateLimit && proxy) {
-                proxyManager.markProxyFailure(proxy.index, '429');
+            const errMsg = error.message || '';
+            let errorType = 'other';
+            if (errMsg.includes('429')) errorType = '429';
+            else if (errMsg.includes('403')) errorType = '403';
+            else if (errMsg.includes('Sign in') || errMsg.includes('captcha')) errorType = 'captcha';
+
+            if (session) {
+                sessionPool.release(session.id, false, errorType);
             }
 
-            logEvent(logger, 'download', 1, 'failure', startTime, { error: error.message });
+            logEvent(logger, 'download', 1, 'failure', startTime, { error: errMsg, errorType });
             throw error;
         }
     });

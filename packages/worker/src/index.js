@@ -10,6 +10,9 @@ const redisConnection = new Redis(REDIS_URL, {
     maxRetriesPerRequest: null,
 });
 
+// Publisher for dispatch events
+const redisPublisher = new Redis(REDIS_URL);
+
 console.log('Starting Soundry Worker...');
 
 const concurrency = parseInt(process.env.WORKER_CONCURRENCY) || 2;
@@ -17,30 +20,32 @@ console.log(`Worker concurrency: ${concurrency} concurrent jobs`);
 
 const worker = new Worker('downloads', async (job) => {
     console.log(`Processing job ${job.id} for ${job.data.url}`);
-
-    // Create initial Track record if not exists?
-    // Actually our API didn't create the track, so we must create it here or API should have.
-    // Plan said: API adds to queue. Worker processes.
-    // So we need to create the Track record ASAP.
-    // But if we fail immediately, we might not want spam. 
-    // Let's create it as "processing" once we pick it up.
-
     return await processJob(job, prisma);
-
 }, {
     connection: redisConnection,
-    concurrency: parseInt(process.env.WORKER_CONCURRENCY) || 2 // Configurable concurrency for I/O-bound tasks
+    concurrency // Use config variable
 });
 
-worker.on('completed', (job) => {
+async function triggerDispatch() {
+    try {
+        await redisPublisher.publish('soundry:dispatch', 'job-finished');
+    } catch (e) {
+        console.error('Failed to publish dispatch event:', e);
+    }
+}
+
+worker.on('completed', async (job) => {
     console.log(`Job ${job.id} completed!`);
+    await triggerDispatch();
 });
 
-worker.on('failed', (job, err) => {
+worker.on('failed', async (job, err) => {
     console.error(`Job ${job.id} failed: ${err.message}`);
+    await triggerDispatch();
 });
 
 process.on('SIGTERM', async () => {
     await worker.close();
     await prisma.$disconnect();
+    redisPublisher.disconnect();
 });

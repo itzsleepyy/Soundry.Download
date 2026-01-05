@@ -45,6 +45,7 @@ model SessionGroup {
   totalTracks  Int
   createdAt    DateTime      @default(now())
   items        SessionItem[]
+  paused       Boolean       @default(false)
 }
 
 model SessionItem {
