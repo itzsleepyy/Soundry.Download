@@ -21,8 +21,8 @@ const nextConfig = {
     async redirects() {
         return [
             {
-                source: '/',
-                destination: '/status',
+                source: '/status',
+                destination: '/',
                 permanent: false, // Temporary redirect while we fix issues
             },
         ]

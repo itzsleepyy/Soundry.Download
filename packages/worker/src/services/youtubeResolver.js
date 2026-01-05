@@ -2,17 +2,34 @@
  * YouTube Resolver Service
  * 
  * Resolves search queries to direct YouTube video URLs by scraping
- * YouTube's search results page. This avoids yt-dlp's ytsearch which
- * triggers bot detection.
+ * YouTube's search results page. Now routes all traffic through
+ * residential proxies via ProxyManager.
  * 
  * Architecture:
- * - Search: HTTP GET to YouTube search (no auth, no cookies)
- * - Download: Separate concern handled by yt-dlp
+ * - All YouTube traffic goes through proxy layer
+ * - Uses same proxy pool as download operations
+ * - Consistent fingerprint (same proxy for resolve + download when possible)
  * 
  * This service is for RESOLUTION ONLY, not downloading.
  */
 
 const https = require('https');
+const http = require('http');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+const { SocksProxyAgent } = require('socks-proxy-agent');
+const proxyManager = require('./proxyManager');
+
+/**
+ * Create appropriate proxy agent based on URL scheme
+ * @param {string} proxyUrl - Proxy URL (http:// or socks5://)
+ * @returns {Object} Proxy agent
+ */
+function createProxyAgent(proxyUrl) {
+    if (proxyUrl.startsWith('socks')) {
+        return new SocksProxyAgent(proxyUrl);
+    }
+    return new HttpsProxyAgent(proxyUrl);
+}
 
 /**
  * Extracts video ID from YouTube search results page HTML/JSON
@@ -94,13 +111,21 @@ function findVideoIdInData(obj, depth = 0) {
 }
 
 /**
- * Performs HTTP GET request to URL
+ * Performs HTTP GET request to URL, optionally through proxy
  * @param {string} url - URL to fetch
+ * @param {string|null} proxyUrl - Optional proxy URL
  * @returns {Promise<string>} - Response body
  */
-function httpGet(url) {
+function httpGet(url, proxyUrl = null) {
     return new Promise((resolve, reject) => {
+        const parsedUrl = new URL(url);
+        const isHttps = parsedUrl.protocol === 'https:';
+
         const options = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || (isHttps ? 443 : 80),
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -109,10 +134,17 @@ function httpGet(url) {
             }
         };
 
-        https.get(url, options, (res) => {
+        // Add proxy agent if provided
+        if (proxyUrl) {
+            options.agent = createProxyAgent(proxyUrl);
+        }
+
+        const protocol = isHttps ? https : http;
+
+        const req = protocol.request(options, (res) => {
             // Handle redirects
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                return httpGet(res.headers.location).then(resolve).catch(reject);
+                return httpGet(res.headers.location, proxyUrl).then(resolve).catch(reject);
             }
 
             if (res.statusCode !== 200) {
@@ -124,12 +156,20 @@ function httpGet(url) {
             res.on('data', chunk => data += chunk);
             res.on('end', () => resolve(data));
             res.on('error', reject);
-        }).on('error', reject);
+        });
+
+        req.on('error', reject);
+        req.setTimeout(30000, () => {
+            req.destroy();
+            reject(new Error('Request timeout'));
+        });
+        req.end();
     });
 }
 
 /**
  * Resolves a search query to a direct YouTube video URL
+ * Routes through residential proxy if available
  * 
  * @param {string} query - Search query (e.g. "Drake One Dance official audio")
  * @returns {Promise<string>} - Direct YouTube URL (https://youtube.com/watch?v=...)
@@ -142,27 +182,53 @@ async function resolveYouTubeUrl(query) {
     const encodedQuery = encodeURIComponent(query);
     const searchUrl = `https://www.youtube.com/results?search_query=${encodedQuery}`;
 
-    try {
-        // Fetch search results page
-        const html = await httpGet(searchUrl);
+    // Try with proxies, retry on failure
+    const maxAttempts = Math.max(2, proxyManager.getProxyCount());
+    let lastError = null;
 
-        // Extract first video ID
-        const videoId = extractVideoId(html);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const proxy = proxyManager.getHealthyProxy();
+        const proxyLabel = proxy ? proxyManager.sanitizeProxyUrl(proxy.url) : 'direct';
 
-        if (!videoId) {
-            console.error('[YouTubeResolver] No video ID found in search results');
-            throw new Error('No YouTube video found for query');
+        console.log(`[YouTubeResolver] Attempt ${attempt}/${maxAttempts}: proxy=${proxyLabel}`);
+
+        try {
+            // Fetch search results page
+            const html = await httpGet(searchUrl, proxy?.url);
+
+            // Extract first video ID
+            const videoId = extractVideoId(html);
+
+            if (!videoId) {
+                console.error('[YouTubeResolver] No video ID found in search results');
+                throw new Error('No YouTube video found for query');
+            }
+
+            const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+            console.log(`[YouTubeResolver] Resolved to: ${videoUrl}`);
+
+            // Success - mark proxy healthy
+            if (proxy) proxyManager.markProxySuccess(proxy.index);
+
+            return videoUrl;
+
+        } catch (error) {
+            lastError = error;
+            console.error(`[YouTubeResolver] Attempt ${attempt} failed: ${error.message}`);
+
+            // Check if proxy-related failure
+            if (proxy && (error.message.includes('HTTP 4') || error.message.includes('HTTP 5') || error.message.includes('timeout'))) {
+                proxyManager.markProxyFailure(proxy.index, error.message);
+            }
+
+            if (attempt < maxAttempts) {
+                console.log('[YouTubeResolver] Retrying with different proxy...');
+                continue;
+            }
         }
-
-        const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-        console.log(`[YouTubeResolver] Resolved to: ${videoUrl}`);
-
-        return videoUrl;
-
-    } catch (error) {
-        console.error(`[YouTubeResolver] Search failed: ${error.message}`);
-        throw new Error(`YouTube search failed: ${error.message}`);
     }
+
+    throw new Error(`YouTube search failed after ${maxAttempts} attempts: ${lastError?.message}`);
 }
 
 /**

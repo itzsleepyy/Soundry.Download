@@ -5,6 +5,7 @@ const { getSpotifyMetadata } = require('./providers/spotify');
 const { resolveYouTubeUrl, buildSearchQuery } = require('./services/youtubeResolver');
 const { transcodeFile } = require('./transcoder');
 const { v4: uuidv4 } = require('uuid');
+const rateLimiter = require('./services/rateLimiter');
 
 const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || '/data/downloads';
 
@@ -15,6 +16,27 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 
 async function processJob(job, prisma) {
     const { url, formats, sessionToken, groupId, trackId: existingTrackId } = job.data;
+    const jobId = job.id;
+
+    // Structured logger for this job context
+    const logger = {
+        info: (obj) => {
+            console.log(JSON.stringify({
+                jobId,
+                trackId: existingTrackId || 'unknown',
+                timestamp: new Date().toISOString(),
+                ...obj
+            }));
+        },
+        error: (obj) => {
+            console.error(JSON.stringify({
+                jobId,
+                trackId: existingTrackId || 'unknown',
+                timestamp: new Date().toISOString(),
+                ...obj
+            }));
+        }
+    };
 
     // If trackId is provided (from API), use existing Track record
     let track;
@@ -31,7 +53,7 @@ async function processJob(job, prisma) {
 
         // Check if already cancelled before doing any work
         if (track.status === 'cancelled') {
-            console.log(`Track ${existingTrackId} was cancelled, skipping`);
+            logger.info({ message: 'Track cancelled, skipping' });
             return { trackId: existingTrackId, status: 'cancelled' };
         }
 
@@ -61,7 +83,7 @@ async function processJob(job, prisma) {
     // 1. Fetch Metadata & Prepare Download
     try {
         if (provider === 'spotify') {
-            console.log(`Fetching Spotify metadata for: ${url}`);
+            logger.info({ message: `Fetching Spotify metadata for: ${url}` });
             const meta = await getSpotifyMetadata(url);
             title = meta.title;
             artist = meta.artist;
@@ -69,20 +91,22 @@ async function processJob(job, prisma) {
             providerId = meta.providerId;
 
             // Resolve to direct YouTube URL using HTTP-based resolver
-            // This avoids yt-dlp's ytsearch which triggers bot detection
             const searchQuery = buildSearchQuery(meta.artist, meta.title);
-            console.log(`[Resolver] Built search query: "${searchQuery}"`);
+            logger.info({ message: 'Resolving YouTube URL', searchQuery });
 
             try {
-                downloadUrl = await resolveYouTubeUrl(searchQuery);
-                console.log(`[Resolver] Resolved to YouTube URL: ${downloadUrl}`);
+                // Apply rate limit to resolution
+                downloadUrl = await rateLimiter.run('RESOLVE', async () => {
+                    return await resolveYouTubeUrl(searchQuery);
+                });
+                logger.info({ message: 'Resolved URL', downloadUrl });
             } catch (resolverError) {
-                console.error(`[Resolver] Failed to resolve YouTube URL: ${resolverError.message}`);
+                logger.error({ message: 'Resolve failed', error: resolverError.message });
                 throw new Error(`Could not find YouTube video for: ${meta.artist} - ${meta.title}`);
             }
 
         } else if (provider === 'youtube' || provider === 'soundcloud') {
-            const meta = await getYoutubeMetadata(url);
+            const meta = await getYoutubeMetadata(url, logger);
             if (meta) {
                 title = meta.title;
                 artist = meta.artist;
@@ -91,10 +115,10 @@ async function processJob(job, prisma) {
             }
         }
     } catch (e) {
-        console.warn('Metadata fetch failed, creating placeholder track or failing if critical', e);
+        logger.error({ message: 'Metadata fetch failed', error: e.message });
         // For Spotify, metadata fetch is critical to get the search query.
         if (provider === 'spotify') throw e;
-        if (provider === 'spotify') throw e;
+        if (provider === 'youtube') throw e; // Usually critical for YouTube too now
     }
 
     // 1.5 Deduplication Check
@@ -103,7 +127,6 @@ async function processJob(job, prisma) {
             where: {
                 provider: `${provider}:${providerId}`,
                 status: 'completed',
-                // Check if it has files. Note: Prisma might not guarantee file on disk, so we verify below.
             },
             include: { files: true }
         });
@@ -115,14 +138,10 @@ async function processJob(job, prisma) {
                 return fs.existsSync(fullPath);
             });
 
-            // Also check not expired (though we filter logic below, strictly speaking we can revive expired if files exist)
-            // But if cleanup ran, files might be gone.
-
             if (hasFiles) {
-                console.log(`Found existing track for ${provider}:${providerId}, reusing ${existingTrack.id}`);
+                logger.info({ message: 'Deduplication success', existingTrackId: existingTrack.id });
 
                 if (existingTrackId) {
-                    // Delete the placeholder track and update SessionItem to point to existing track
                     await prisma.sessionItem.updateMany({
                         where: { trackId: existingTrackId },
                         data: { trackId: existingTrack.id }
@@ -151,12 +170,11 @@ async function processJob(job, prisma) {
             }
         }
     } catch (e) {
-        console.warn('Deduplication check failed, proceeding with fresh download', e);
+        logger.error({ message: 'Deduplication check failed', error: e.message });
     }
 
     // 2. Update or Create Database Record
     if (existingTrackId) {
-        // Update existing track with metadata and set to processing
         track = await prisma.track.update({
             where: { id: existingTrackId },
             data: {
@@ -168,7 +186,6 @@ async function processJob(job, prisma) {
             }
         });
     } else {
-        // Create new track (legacy path)
         track = await prisma.track.create({
             data: {
                 id: trackId,
@@ -180,7 +197,6 @@ async function processJob(job, prisma) {
             }
         });
 
-        // Create SessionItem for legacy path
         if (sessionToken) {
             await prisma.sessionItem.create({
                 data: {
@@ -195,29 +211,19 @@ async function processJob(job, prisma) {
 
     // 3. Download & Transcode
     try {
-        // Enforce Duration Limit (15 mins) - Check here so we can update DB on failure
         if (duration > 900) {
-            throw new Error('Due to recent abuse, we have temporarily limited tracks to 15 minutes. We hope to lift this soon.');
+            throw new Error('Track too long (max 15m)');
         }
 
-        // We always use a consistent source name for intermediate file
-        // downloadYoutube uses yt-dlp which handles container detection, but we force output path.
-        // We'll use .webm as a generic container wrapper for downloadYoutube's output if possible,
-        // or rely on yt-dlp to append extension if we don't force it?
-        // simple-youtube-dl provider uses `output: outputPath`.
         const sourcePath = path.join(trackDir, 'source.webm');
 
-        // Check for cancellation before download
         const trackCheck1 = await prisma.track.findUnique({ where: { id: track.id } });
         if (trackCheck1 && trackCheck1.status === 'cancelled') throw new Error('Job cancelled by user');
 
-        console.log(`Downloading audio from: ${downloadUrl} to ${sourcePath}`);
-        await downloadYoutube(downloadUrl, sourcePath);
+        // Pass logger to download
+        await downloadYoutube(downloadUrl, sourcePath, logger);
 
-        // Verification: Check if file exists. 
-        // yt-dlp might append extension (e.g. source.webm.m4a) if we are not careful?
-        // With `output: outputPath`, it usually respects it. But if it merges formats, it might be weird.
-        // Let's check for any file starting with 'source' if exact match fails.
+        // Verification
         let actualSourcePath = sourcePath;
         if (!fs.existsSync(sourcePath)) {
             const files = fs.readdirSync(trackDir);
@@ -227,34 +233,27 @@ async function processJob(job, prisma) {
         }
 
         const filesCreated = [];
-        const supportedFormats = ['mp3', 'flac', 'wav'];
-        const activeFormats = formats.filter(f => supportedFormats.includes(f));
+        const mp3Path = path.join(trackDir, 'mp3.mp3');
+        logger.info({ message: 'Transcoding to mp3...' });
+        const mp3Stats = await transcodeFile(actualSourcePath, mp3Path, 'mp3');
+        filesCreated.push({
+            format: 'mp3',
+            path: `${track.id}/mp3.mp3`,
+            sizeBytes: mp3Stats.size
+        });
 
-        for (const format of activeFormats) {
-            // Check for cancellation before each transcode
-            const trackCheck2 = await prisma.track.findUnique({ where: { id: track.id } });
-            if (trackCheck2 && trackCheck2.status === 'cancelled') throw new Error('Job cancelled by user');
-
-            const relPath = `${track.id}/${format}.${format}`;
-            const destPath = path.join(trackDir, `${format}.${format}`);
-            console.log(`Transcoding to ${format}...`);
-            const stats = await transcodeFile(actualSourcePath, destPath, format);
-            filesCreated.push({ format, path: relPath, sizeBytes: stats.size });
+        const sourceFinal = path.join(trackDir, 'source.m4a');
+        if (actualSourcePath !== sourceFinal) {
+            fs.renameSync(actualSourcePath, sourceFinal);
         }
 
-        // Cleanup source
-        if (fs.existsSync(actualSourcePath)) {
-            try { fs.unlinkSync(actualSourcePath); } catch (e) { }
-        }
-
-        // 4. Update Success
         const now = new Date();
         const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
         await prisma.track.update({
             where: { id: track.id },
             data: {
-                title, // Update in case it changed or was placeholder
+                title,
                 artist,
                 durationSeconds: duration,
                 status: 'completed',
@@ -273,9 +272,11 @@ async function processJob(job, prisma) {
         return { trackId: track.id, status: 'completed' };
 
     } catch (err) {
-        console.error('Processing failed', err);
+        logger.error({ message: 'Processing failed', error: err.message });
+
         let errMsg = err.message;
-        if (errMsg.includes('Status code: 429')) errMsg = 'Rate Limit Reached (YouTube/Spotify)';
+        const isRateLimit = errMsg.includes('Status code: 429') || errMsg.includes('Sign in');
+        if (isRateLimit) errMsg = 'Rate Limit Reached (YouTube/Spotify) - Retrying...';
 
         await prisma.track.update({
             where: { id: track.id },

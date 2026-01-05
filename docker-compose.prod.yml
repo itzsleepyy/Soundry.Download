@@ -44,11 +44,14 @@ services:
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-10}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      # Residential Proxy Configuration (Oxylabs or compatible)
+      - PROXY_URLS=${PROXY_URLS}
       # Optional: YouTube cookies for bot detection fallback
       # - YOUTUBE_COOKIE_1=${YOUTUBE_COOKIE_1}
       # - YOUTUBE_COOKIE_2=${YOUTUBE_COOKIE_2}
     volumes:
       - soundry-data:/app/data
+      - soundry-cookies:/app/cookies
     depends_on:
       - redis
     restart: unless-stopped
@@ -82,6 +85,25 @@ services:
       - "traefik.http.routers.soundry-frontend.tls.certresolver=letsencrypt"
       - "traefik.http.services.soundry-frontend.loadbalancer.server.port=3000"
 
+  # Cookie Service - Automated browser session generation
+  # Generates fresh YouTube cookies using Puppeteer + stealth
+  cookie-service:
+    build:
+      context: .
+      dockerfile: packages/cookie-service/Dockerfile
+    environment:
+      - COOKIES_DIR=/app/cookies
+      - PROXY_URLS=${PROXY_URLS}
+      - COOKIE_REFRESH_DAYS=${COOKIE_REFRESH_DAYS:-7}
+      - NUM_COOKIE_SESSIONS=${NUM_COOKIE_SESSIONS:-3}
+    volumes:
+      - soundry-cookies:/app/cookies
+    restart: unless-stopped
+    networks:
+      - soundry-net
+    labels:
+      - "coolify.managed=true"
+
   # Redis for Queue
   redis:
     image: redis:7-alpine
@@ -101,4 +123,6 @@ volumes:
   soundry-data:
     driver: local
   redis-data:
+    driver: local
+  soundry-cookies:
     driver: local

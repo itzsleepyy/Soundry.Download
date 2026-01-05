@@ -40,6 +40,8 @@ services:
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-10}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      # Residential Proxy Configuration (Oxylabs or compatible)
+      - PROXY_URLS=${PROXY_URLS}
       # Optional: YouTube cookies for bot detection fallback
       # - YOUTUBE_COOKIE_1=${YOUTUBE_COOKIE_1}
       # - YOUTUBE_COOKIE_2=${YOUTUBE_COOKIE_2}
@@ -47,7 +49,7 @@ services:
       - ./data:/app/data
     deploy:
       mode: replicated
-      replicas: 3 # Start with 3 workers (30 concurrent jobs)
+      replicas: 1 # Start with 3 workers (30 concurrent jobs)
       restart_policy:
         condition: on-failure
     depends_on:

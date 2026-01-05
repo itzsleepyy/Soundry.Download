@@ -188,7 +188,12 @@ apiRouter.post('/jobs', async (req, res) => {
                 trackId: track.id,
                 requestId: require('uuid').v4()
             }, {
-                priority: jobData.groupId ? 5 : 1
+                priority: jobData.groupId ? 5 : 1,
+                attempts: 5,
+                backoff: {
+                    type: 'exponential',
+                    delay: 2000
+                }
             });
             jobs.push(job);
         }
@@ -385,6 +390,12 @@ apiRouter.post('/library/session/:id/retry', async (req, res) => {
             trackId: newTrack.id,
             groupId: item.groupId,
             requestId: require('uuid').v4()
+        }, {
+            attempts: 5,
+            backoff: {
+                type: 'exponential',
+                delay: 2000
+            }
         });
 
         res.json({ status: 'retrying', trackId: newTrack.id });

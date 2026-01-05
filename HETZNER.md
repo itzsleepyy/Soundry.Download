@@ -384,3 +384,180 @@ usermod -aG sudo soundry
 6. ⏳ Configure automated backups
 
 You're live! 🚀
+
+# Hybrid Download Setup - Runbook
+
+This runbook documents how to configure and operate the hybrid download system using residential proxies and automated cookie generation.
+
+## Architecture Overview
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│  cookie-service │────▶│ /app/cookies    │───┐
+│  (Puppeteer)    │     │ (shared volume) │   │
+└─────────────────┘     └─────────────────┘   │
+                                               ▼
+┌─────────────────┐     ┌─────────────────┐   ┌─────────────────┐
+│  Oxylabs        │◀────│     worker      │◀──│  BullMQ Jobs    │
+│  Residential    │     │   (yt-dlp)      │   │                 │
+│  Proxies        │     └─────────────────┘   └─────────────────┘
+└─────────────────┘
+```
+
+## 1. Residential Proxy Setup (Oxylabs)
+
+### Create Oxylabs Account
+1. Sign up at [oxylabs.io](https://oxylabs.io)
+2. Purchase Residential Proxies (pay-per-GB)
+3. Note your credentials:
+   - Username (format: `customer-USERNAME`)
+   - Password
+   - Endpoint: `pr.oxylabs.io:7777`
+
+### Configure Proxy URL
+
+Add to your environment variables in Coolify or `.env`:
+
+```bash
+# Single proxy endpoint (Oxylabs auto-rotates IPs)
+PROXY_URLS="http://customer-USERNAME:PASSWORD@pr.oxylabs.io:7777"
+
+# Or multiple endpoints for redundancy
+PROXY_URLS="http://user:pass@pr.oxylabs.io:7777,http://user:pass@pr2.oxylabs.io:7777"
+```
+
+### Oxylabs Proxy Formats
+
+| Type | URL Format |
+|------|------------|
+| Rotating | `http://customer-USER:PASS@pr.oxylabs.io:7777` |
+| Sticky Session | `http://customer-USER-sessid-ABC123:PASS@pr.oxylabs.io:7777` |
+| Country Target | `http://customer-USER-cc-US:PASS@pr.oxylabs.io:7777` |
+
+## 2. Cookie Service Configuration
+
+The cookie-service automatically generates fresh YouTube cookies using Puppeteer:
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROXY_URLS` | - | Proxies for cookie generation |
+| `COOKIE_REFRESH_DAYS` | 7 | Days between cookie regeneration |
+| `NUM_COOKIE_SESSIONS` | 3 | Number of cookie files to generate |
+
+### How It Works
+1. On startup, generates N cookie sessions via Puppeteer
+2. Each session uses a different proxy (round-robin)
+3. Cookies saved to `/app/cookies/cookie-1.txt`, etc.
+4. Worker reads cookies from same volume
+5. Refreshes automatically every N days
+
+### Manual Cookie Generation
+
+If cookie-service isn't running, generate manually:
+
+```bash
+# SSH into server
+docker exec -it soundry_cookie-service sh
+
+# Generate single cookie
+node src/generate.js
+
+# Or with custom name
+node src/generate.js cookie-manual
+```
+
+## 3. Adding New Proxies
+
+### Via Environment Variable
+
+```bash
+# Update PROXY_URLS in Coolify
+PROXY_URLS="http://proxy1...,http://proxy2...,http://proxy3..."
+```
+
+Then redeploy the worker service.
+
+### Supported Formats
+
+- HTTP: `http://user:pass@host:port`
+- HTTPS: `https://user:pass@host:port`
+- SOCKS5: `socks5://user:pass@host:port`
+
+## 4. Retry Logic & Failure Handling
+
+### Worker Behavior
+
+1. **Per-request**: Gets healthy proxy + healthy cookie
+2. **On 403/429/CAPTCHA**: Marks pair as degraded, rotates to next
+3. **After 3 consecutive failures**: Proxy marked degraded for 5 minutes
+4. **If all proxies exhausted**: Job fails with clear error message
+
+### Error Types
+
+| Error | Meaning | Action |
+|-------|---------|--------|
+| HTTP 403 | Bot block | Rotate proxy |
+| HTTP 429 | Rate limit | Rotate proxy |
+| CAPTCHA | Challenge detected | Rotate cookie |
+| Timeout | Proxy dead | Rotate proxy |
+
+### Recovery
+
+- Degraded proxies recover after 5 minutes
+- Cookie-service regenerates automatically
+- No manual intervention needed for transient issues
+
+## 5. Monitoring & Debugging
+
+### Check Proxy Status
+
+```bash
+# View worker logs
+docker logs soundry_worker --tail 100 | grep ProxyManager
+
+# Example output:
+# [ProxyManager] Loaded 2 proxy(ies)
+# [ProxyManager] Proxy 1 success (total: 42)
+# [ProxyManager] Proxy 2 DEGRADED: http://***@pr.oxylabs.io:7777
+```
+
+### Check Cookie Status
+
+```bash
+# List cookies
+docker exec soundry_worker ls -la /app/cookies/
+
+# Verify cookie format
+docker exec soundry_worker head /app/cookies/cookie-1.txt
+```
+
+### Common Issues
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| "No proxies configured" | Missing PROXY_URLS | Add environment variable |
+| All proxies degraded | Rate limited | Wait 5 min or add more proxies |
+| Invalid cookie format | Newlines stripped | Check cookie-service logs |
+| Puppeteer crash | Memory issue | Increase container memory |
+
+## 6. Cost Optimization
+
+### Bandwidth Usage
+
+- YouTube audio: ~3-10 MB per track
+- At 100 tracks/day: ~500 MB - 1 GB/day
+- Oxylabs cost: ~$3-15/GB (residential)
+
+### Reducing Costs
+
+1. Use Oxylabs sticky sessions for multi-request downloads
+2. Increase cookie refresh interval if stable
+3. Consider datacenter proxies for resolver (cheaper)
+
+## 7. Security Checklist
+
+- [ ] Cookie files in persistent volume, not image
+- [ ] No credentials in logs (sanitized automatically)
+- [ ] Cookie-service runs in isolated network
