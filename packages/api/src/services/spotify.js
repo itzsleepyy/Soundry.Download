@@ -68,18 +68,25 @@ async function executeWithRetry(fn, retries = 3) {
 
 async function getSpotifyData(url) {
     const api = getSpotifyApi();
-    const parts = url.split('/');
-    const typeIndex = parts.findIndex(p => ['track', 'album', 'playlist'].includes(p));
-    if (typeIndex === -1) throw new Error('Invalid Spotify URL: Type not found');
+    // Use URL object for robust parsing
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(url);
+    } catch (e) {
+        throw new Error(`Invalid URL format: ${url}`);
+    }
 
-    const type = parts[typeIndex];
-    const potentialId = parts[typeIndex + 1];
-    if (!potentialId) throw new Error('Invalid Spotify URL: ID missing');
+    const segments = parsedUrl.pathname.split('/').filter(Boolean);
+    const typeIndex = segments.findIndex(s => ['track', 'album', 'playlist'].includes(s));
 
-    const id = potentialId.split('?')[0];
+    if (typeIndex === -1 || typeIndex + 1 >= segments.length) {
+        throw new Error(`Could not parse Spotify type/ID from: ${url}`);
+    }
 
-    console.log(`[SpotifyService] Parsing URL: ${url}`);
-    console.log(`[SpotifyService] Extracted Type: ${type}, ID: ${id}`);
+    const type = segments[typeIndex];
+    const id = segments[typeIndex + 1];
+
+    console.log(`[SpotifyService] Parsed URL: ${url} -> Type: ${type}, ID: ${id}`);
 
     return executeWithRetry(async () => {
         if (type === 'track') {

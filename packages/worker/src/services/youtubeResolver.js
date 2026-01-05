@@ -2,27 +2,21 @@
  * YouTube Resolver Service
  * 
  * Resolves search queries to direct YouTube video URLs by scraping
- * YouTube's search results page. Now routes all traffic through
- * residential proxies via ProxyManager.
+ * YouTube's search results page.
  * 
  * Architecture:
- * - All YouTube traffic goes through proxy layer
- * - Uses same proxy pool as download operations
- * - Consistent fingerprint (same proxy for resolve + download when possible)
- * 
- * This service is for RESOLUTION ONLY, not downloading.
+ * - Uses SessionPool to acquire a proxy/identity.
+ * - Respects global rate limits (caller handles RateLimiter interaction).
  */
 
 const https = require('https');
 const http = require('http');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { SocksProxyAgent } = require('socks-proxy-agent');
-const proxyManager = require('./proxyManager');
+const sessionPool = require('./sessionPool');
 
 /**
  * Create appropriate proxy agent based on URL scheme
- * @param {string} proxyUrl - Proxy URL (http:// or socks5://)
- * @returns {Object} Proxy agent
  */
 function createProxyAgent(proxyUrl) {
     if (proxyUrl.startsWith('socks')) {
@@ -33,14 +27,9 @@ function createProxyAgent(proxyUrl) {
 
 /**
  * Extracts video ID from YouTube search results page HTML/JSON
- * @param {string} html - Raw HTML response from YouTube
- * @returns {string|null} - First valid video ID or null
  */
 function extractVideoId(html) {
-    // YouTube embeds initial data as JSON in the page
-    // Look for ytInitialData which contains search results
-
-    // Method 1: Extract from ytInitialData JSON
+    // Method 1: ytInitialData JSON
     const ytInitialDataMatch = html.match(/var ytInitialData = ({.+?});<\/script>/s);
     if (ytInitialDataMatch) {
         try {
@@ -48,11 +37,11 @@ function extractVideoId(html) {
             const videoId = findVideoIdInData(data);
             if (videoId) return videoId;
         } catch (e) {
-            console.warn('[YouTubeResolver] Failed to parse ytInitialData JSON');
+            // ignore
         }
     }
 
-    // Method 2: Look for ytInitialData in different format
+    // Method 2: Alternate ytInitialData
     const altMatch = html.match(/ytInitialData['"]\s*\]\s*=\s*({.+?});/s);
     if (altMatch) {
         try {
@@ -60,18 +49,17 @@ function extractVideoId(html) {
             const videoId = findVideoIdInData(data);
             if (videoId) return videoId;
         } catch (e) {
-            console.warn('[YouTubeResolver] Failed to parse alternate ytInitialData');
+            // ignore
         }
     }
 
-    // Method 3: Direct regex for video IDs in watch URLs
-    // This is a fallback - less accurate but works
+    // Method 3: Direct regex
     const watchMatch = html.match(/\/watch\?v=([a-zA-Z0-9_-]{11})/);
     if (watchMatch) {
         return watchMatch[1];
     }
 
-    // Method 4: Look for videoId in JSON structures
+    // Method 4: JSON "videoId"
     const videoIdMatch = html.match(/"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"/);
     if (videoIdMatch) {
         return videoIdMatch[1];
@@ -82,19 +70,15 @@ function extractVideoId(html) {
 
 /**
  * Recursively searches JSON structure for first videoId
- * Prioritizes organic video results over ads/shorts
  */
 function findVideoIdInData(obj, depth = 0) {
-    if (depth > 15) return null; // Prevent infinite recursion
-
+    if (depth > 15) return null;
     if (!obj || typeof obj !== 'object') return null;
 
-    // Look for videoRenderer which contains organic video results
     if (obj.videoRenderer && obj.videoRenderer.videoId) {
         return obj.videoRenderer.videoId;
     }
 
-    // Search through arrays and objects
     if (Array.isArray(obj)) {
         for (const item of obj) {
             const result = findVideoIdInData(item, depth + 1);
@@ -112,9 +96,6 @@ function findVideoIdInData(obj, depth = 0) {
 
 /**
  * Performs HTTP GET request to URL, optionally through proxy
- * @param {string} url - URL to fetch
- * @param {string|null} proxyUrl - Optional proxy URL
- * @returns {Promise<string>} - Response body
  */
 function httpGet(url, proxyUrl = null) {
     return new Promise((resolve, reject) => {
@@ -130,11 +111,10 @@ function httpGet(url, proxyUrl = null) {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'identity', // Avoid gzip for simpler parsing
+                'Accept-Encoding': 'identity',
             }
         };
 
-        // Add proxy agent if provided
         if (proxyUrl) {
             options.agent = createProxyAgent(proxyUrl);
         }
@@ -142,7 +122,6 @@ function httpGet(url, proxyUrl = null) {
         const protocol = isHttps ? https : http;
 
         const req = protocol.request(options, (res) => {
-            // Handle redirects
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return httpGet(res.headers.location, proxyUrl).then(resolve).catch(reject);
             }
@@ -169,89 +148,73 @@ function httpGet(url, proxyUrl = null) {
 
 /**
  * Resolves a search query to a direct YouTube video URL
- * Routes through residential proxy if available
- * 
- * @param {string} query - Search query (e.g. "Drake One Dance official audio")
- * @returns {Promise<string>} - Direct YouTube URL (https://youtube.com/watch?v=...)
- * @throws {Error} - If no video found or network error
+ * Uses SessionPool to get an identity.
  */
 async function resolveYouTubeUrl(query) {
     console.log(`[YouTubeResolver] Searching for: "${query}"`);
 
-    // Build search URL
     const encodedQuery = encodeURIComponent(query);
     const searchUrl = `https://www.youtube.com/results?search_query=${encodedQuery}`;
 
-    // Try with proxies, retry on failure
-    const maxAttempts = Math.max(2, proxyManager.getProxyCount());
+    // Try up to 2 times
+    const attempts = 2;
     let lastError = null;
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const proxy = proxyManager.getHealthyProxy();
-        const proxyLabel = proxy ? proxyManager.sanitizeProxyUrl(proxy.url) : 'direct';
-
-        console.log(`[YouTubeResolver] Attempt ${attempt}/${maxAttempts}: proxy=${proxyLabel}`);
-
+    for (let i = 0; i < attempts; i++) {
+        let session = null;
         try {
-            // Fetch search results page
-            const html = await httpGet(searchUrl, proxy?.url);
+            session = await sessionPool.acquire();
+            const proxyLabel = session.proxyUrl ? new URL(session.proxyUrl).host : 'direct';
+            console.log(`[YouTubeResolver] Attempt ${i + 1}/${attempts} using Session ${session.id} (Proxy: ${proxyLabel})`);
 
-            // Extract first video ID
+            const html = await httpGet(searchUrl, session.proxyUrl);
             const videoId = extractVideoId(html);
 
             if (!videoId) {
-                console.error('[YouTubeResolver] No video ID found in search results');
-                throw new Error('No YouTube video found for query');
+                // If the pages loads but no ID, maybe blocked or format changed?
+                // Treat as failure to retry
+                throw new Error('No YouTube video found in response');
             }
 
             const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
             console.log(`[YouTubeResolver] Resolved to: ${videoUrl}`);
 
-            // Success - mark proxy healthy
-            if (proxy) proxyManager.markProxySuccess(proxy.index);
-
+            // Success
+            sessionPool.release(session.id, true);
             return videoUrl;
 
         } catch (error) {
             lastError = error;
-            console.error(`[YouTubeResolver] Attempt ${attempt} failed: ${error.message}`);
+            console.error(`[YouTubeResolver] Attempt ${i + 1} failed: ${error.message}`);
 
-            // Check if proxy-related failure
-            if (proxy && (error.message.includes('HTTP 4') || error.message.includes('HTTP 5') || error.message.includes('timeout'))) {
-                proxyManager.markProxyFailure(proxy.index, error.message);
+            // Release session with failure info
+            if (session) {
+                let errorType = 'other';
+                if (error.message.includes('HTTP 429')) errorType = '429';
+                if (error.message.includes('403')) errorType = '403';
+                sessionPool.release(session.id, false, errorType);
             }
-
-            if (attempt < maxAttempts) {
-                console.log('[YouTubeResolver] Retrying with different proxy...');
-                continue;
-            }
+            // continue loop
         }
     }
 
-    throw new Error(`YouTube search failed after ${maxAttempts} attempts: ${lastError?.message}`);
+    throw new Error(`YouTube search failed: ${lastError?.message}`);
 }
 
 /**
- * Builds an optimized search query for finding audio
- * Adds "official audio" to improve match accuracy
- * 
- * @param {string} artist - Artist name
- * @param {string} title - Track title
- * @returns {string} - Optimized search query
+ * Builds an optimized search query
  */
 function buildSearchQuery(artist, title) {
-    // Remove common suffixes that hurt search
     const cleanTitle = title
-        .replace(/\s*\(feat\..*?\)/gi, '') // Remove feat.
-        .replace(/\s*\[.*?\]/g, '')        // Remove [brackets]
-        .replace(/\s*\(.*?remix.*?\)/gi, '') // Remove remix markers
+        .replace(/\s*\(feat\..*?\)/gi, '')
+        .replace(/\s*\[.*?\]/g, '')
+        .replace(/\s*\(.*?remix.*?\)/gi, '')
         .trim();
 
     const cleanArtist = artist
-        .replace(/\s*,\s*/g, ' ') // Replace commas with spaces
+        .replace(/\s*,\s*/g, ' ')
         .trim();
 
-    // Construct query optimized for official audio
     return `${cleanArtist} ${cleanTitle} official audio`;
 }
 

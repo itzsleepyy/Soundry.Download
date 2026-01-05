@@ -61,3 +61,19 @@ model SessionItem {
 
   @@index([sessionToken])
 }
+
+model ResolverCache {
+  id        String   @id @default(uuid())
+  key       String   @unique // e.g. "spotify:trackId" or "artist:title"
+  value     String   // youtubeVideoId
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+model MetadataCache {
+  id        String   @id @default(uuid())
+  key       String   @unique // youtubeVideoId
+  data      String   // JSON string of metadata
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}

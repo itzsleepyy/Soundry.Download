@@ -2,14 +2,9 @@
  * Queue Dispatcher Service
  * 
  * Implements "Fairness" logic by acting as a middleware between the Database Queue and BullMQ.
- * 
- * Responsibilities:
- * 1. Read 'queued' tracks from DB.
- * 2. Group them by User (SessionToken) or Playlist (GroupId).
- * 3. Enforce Concurrency Caps: Max 1 active job per Group.
- * 4. Round-Robin Dispatch: Rotate through groups to prevent starvation.
- * 5. Respect "Paused" state on playlists.
  */
+const Redis = require('ioredis');
+
 class QueueDispatcher {
     constructor(prisma, queue) {
         this.prisma = prisma;
@@ -18,11 +13,14 @@ class QueueDispatcher {
 
         // Configuration
         this.CAP_PER_GROUP = 1; // Max in-flight jobs per playlist/user
+
+        // Redis for Circuit State
+        const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+        this.redis = new Redis(REDIS_URL);
     }
 
     /**
      * Main Dispatch Loop
-     * Called whenever a job completes, or a new job is submitted.
      */
     async dispatch() {
         if (this.isDispatching) return; // Prevent re-entry
@@ -31,10 +29,13 @@ class QueueDispatcher {
         try {
             console.log('[Dispatcher] Running fairness dispatch...');
 
-            // 1. Fetch all Queued Tracks & In-Flight Tracks
-            // We need to know who is 'processing' to enforce caps.
-            // Joining SessionItem to get grouping info.
+            // 0. Check Circuit Breaker
+            const isCircuitOpen = await this.redis.get('soundry:circuit:open');
+            if (isCircuitOpen === 'true') {
+                console.warn('[Dispatcher] ⚠️ Circuit is OPEN (Safe Mode). Skipping Playlist jobs.');
+            }
 
+            // 1. Fetch all Queued Tracks & In-Flight Tracks
             const [queuedItems, processingItems] = await Promise.all([
                 this.prisma.sessionItem.findMany({
                     where: {
@@ -62,20 +63,20 @@ class QueueDispatcher {
             // 2. Group items
             const groups = {}; // Key: GroupId/SessionToken, Value: { queued: [], processing: 0, paused: boolean }
 
-            // Helper to get group key
             const getGroupKey = (item) => item.groupId || item.sessionToken;
 
-            // Initialize groups with processing counts
             for (const item of processingItems) {
                 const key = getGroupKey(item);
                 if (!groups[key]) groups[key] = { queued: [], processing: 0, paused: false };
                 groups[key].processing++;
             }
 
-            // Populate queued items
             for (const item of queuedItems) {
-                // If part of a Paused Group, skip entirely (effectively hidden from queue)
-                if (item.group && item.group.paused) {
+                // Skip Paused Groups
+                if (item.group && item.group.paused) continue;
+
+                // CIRCUIT BREAKER FILTER: Skip Playlists (items with groupId) if Circuit is Open
+                if (isCircuitOpen === 'true' && item.groupId) {
                     continue;
                 }
 
@@ -91,12 +92,10 @@ class QueueDispatcher {
             for (const key of groupKeys) {
                 const group = groups[key];
 
-                // Cap Check
                 if (group.processing >= this.CAP_PER_GROUP) {
-                    continue; // Skip this group, they are full
+                    continue;
                 }
 
-                // Take next available (FIFO within group)
                 if (group.queued.length > 0) {
                     const nextItem = group.queued[0];
                     candidates.push(nextItem);
@@ -108,33 +107,28 @@ class QueueDispatcher {
             // 4. Dispatch Candidates
             for (const item of candidates) {
                 try {
-                    // Update DB to 'processing' immediately to reserve slot
-                    // (Using transaction if possible, but strict order isn't critical here, 
-                    // just preventing double dispatch next run)
                     await this.prisma.track.update({
                         where: { id: item.trackId },
                         data: { status: 'processing' }
                     });
 
-                    // Construct Job Data
-                    // We need to reconstruct 'url' and metadata from DB or just pass minimal info?
-                    // The Worker needs: url, formats, sessionToken, groupId, trackId
+                    // Fix: properly split only on the first colon
+                    const separatorIndex = item.track.provider.indexOf(':');
+                    const providerType = item.track.provider.substring(0, separatorIndex);
+                    const providerId = item.track.provider.substring(separatorIndex + 1);
 
-                    const [providerType, providerId] = item.track.provider.split(':');
                     let url = providerId;
-                    if (providerType === 'youtube') url = `https://www.youtube.com/watch?v=${providerId}`;
-                    else if (providerType === 'spotify') url = `https://open.spotify.com/track/${providerId}`;
-                    // else assume direct url if no prefix match? Or just use providerId as URL if simple.
-
-                    // Note: Schema stores "provider:id" but original job had "url".
-                    // Ideally we should store original URL. For now, reconstruction works for YT/Spotify.
+                    if (providerType === 'youtube') {
+                        // If it's just an ID, reconstruct. If it's a full URL, use it.
+                        if (!providerId.includes('://')) url = `https://www.youtube.com/watch?v=${providerId}`;
+                    } else if (providerType === 'spotify') {
+                        // If it's just an ID, reconstruct. If it's a full URL, ensure we don't double-wrap.
+                        if (!providerId.includes('://')) url = `https://open.spotify.com/track/${providerId}`;
+                    }
 
                     await this.queue.add('download', {
                         url: url,
-                        formats: ['mp3'], // Defaulting, since we lost original format request in DB? 
-                        // Wait, DB has 'files' table but that's for output. 
-                        // The original request 'formats' is not in Track model.
-                        // Assuming standard formats for now.
+                        formats: ['mp3'],
                         sessionToken: item.sessionToken,
                         groupId: item.groupId,
                         trackId: item.trackId,
@@ -148,10 +142,9 @@ class QueueDispatcher {
                     console.log(`[Dispatcher] Dispatched Track ${item.trackId} (Group: ${getGroupKey(item)})`);
                 } catch (e) {
                     console.error(`[Dispatcher] Failed to dispatch ${item.trackId}`, e);
-                    // Revert status so it can be retried?
                     await this.prisma.track.update({
                         where: { id: item.trackId },
-                        data: { status: 'queued' } // Back to queue
+                        data: { status: 'queued' }
                     });
                 }
             }

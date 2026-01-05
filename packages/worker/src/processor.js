@@ -6,10 +6,11 @@ const { resolveYouTubeUrl, buildSearchQuery } = require('./services/youtubeResol
 const { transcodeFile } = require('./transcoder');
 const { v4: uuidv4 } = require('uuid');
 const rateLimiter = require('./services/rateLimiter');
+const CacheService = require('./services/cacheService');
+const circuitBreaker = require('./services/circuitBreaker');
 
 const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || '/data/downloads';
 
-// Ensure downloads dir exists
 if (!fs.existsSync(DOWNLOADS_DIR)) {
     fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
 }
@@ -17,8 +18,8 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 async function processJob(job, prisma) {
     const { url, formats, sessionToken, groupId, trackId: existingTrackId } = job.data;
     const jobId = job.id;
+    const cache = new CacheService(prisma);
 
-    // Structured logger for this job context
     const logger = {
         info: (obj) => {
             console.log(JSON.stringify({
@@ -38,20 +39,21 @@ async function processJob(job, prisma) {
         }
     };
 
-    // If trackId is provided (from API), use existing Track record
     let track;
     let trackId;
     let trackDir;
 
     if (existingTrackId) {
-        // Track was created by API, find and check it
         track = await prisma.track.findUnique({ where: { id: existingTrackId } });
 
         if (!track) {
+            // Unrecoverable: Track deleted from DB?
+            // Throwing here implies we want to retry finding it? No.
+            // But if DB is down, findUnique throws.
+            // If just null, it's logical error.
             throw new Error(`Track ${existingTrackId} not found`);
         }
 
-        // Check if already cancelled before doing any work
         if (track.status === 'cancelled') {
             logger.info({ message: 'Track cancelled, skipping' });
             return { trackId: existingTrackId, status: 'cancelled' };
@@ -61,7 +63,6 @@ async function processJob(job, prisma) {
         trackDir = path.join(DOWNLOADS_DIR, trackId);
         if (!fs.existsSync(trackDir)) fs.mkdirSync(trackDir, { recursive: true });
     } else {
-        // Legacy path: no trackId provided (shouldn't happen with new flow)
         trackId = uuidv4();
         trackDir = path.join(DOWNLOADS_DIR, trackId);
         if (!fs.existsSync(trackDir)) fs.mkdirSync(trackDir, { recursive: true });
@@ -71,159 +72,162 @@ async function processJob(job, prisma) {
     if (url.includes('spotify.com')) provider = 'spotify';
     else if (url.includes('soundcloud.com')) provider = 'soundcloud';
     else if (url.includes('youtube.com') || url.includes('youtu.be')) provider = 'youtube';
-    else throw new Error('Unsupported provider');
+    else {
+        // UNRECOVERABLE
+        logger.error({ message: 'Unsupported provider', url });
+        await markFailed(prisma, existingTrackId || trackId, 'Unsupported provider URL');
+        return { status: 'failed', error: 'Unsupported provider' };
+    }
 
     let title = 'Processing...';
     let artist = 'Unknown Artist';
     let duration = 0;
-    let providerId = url; // Fallback
-    // For Spotify, we need to construct a search query later
+    let providerId = url;
     let downloadUrl = url;
 
-    // 1. Fetch Metadata & Prepare Download
     try {
         if (provider === 'spotify') {
-            logger.info({ message: `Fetching Spotify metadata for: ${url}` });
             const meta = await getSpotifyMetadata(url);
             title = meta.title;
             artist = meta.artist;
             duration = Math.round(meta.duration || 0);
             providerId = meta.providerId;
 
-            // Resolve to direct YouTube URL using HTTP-based resolver
-            const searchQuery = buildSearchQuery(meta.artist, meta.title);
-            logger.info({ message: 'Resolving YouTube URL', searchQuery });
+            const cacheKey = `spotify:${meta.providerId}`;
+            const cachedYoutubeId = await cache.get('resolver', cacheKey);
 
-            try {
-                // Apply rate limit to resolution
+            if (cachedYoutubeId) {
+                logger.info({ message: 'Resolver Cache HIT', cachedYoutubeId });
+                downloadUrl = `https://www.youtube.com/watch?v=${cachedYoutubeId}`;
+            } else {
+                const searchQuery = buildSearchQuery(meta.artist, meta.title);
+
                 downloadUrl = await rateLimiter.run('RESOLVE', async () => {
                     return await resolveYouTubeUrl(searchQuery);
                 });
-                logger.info({ message: 'Resolved URL', downloadUrl });
-            } catch (resolverError) {
-                logger.error({ message: 'Resolve failed', error: resolverError.message });
-                throw new Error(`Could not find YouTube video for: ${meta.artist} - ${meta.title}`);
-            }
 
-        } else if (provider === 'youtube' || provider === 'soundcloud') {
+                let videoId = null;
+                try {
+                    const u = new URL(downloadUrl);
+                    if (u.hostname.includes('youtube.com')) videoId = u.searchParams.get('v');
+                    else if (u.hostname.includes('youtu.be')) videoId = u.pathname.slice(1);
+                } catch { }
+                if (videoId) await cache.set('resolver', cacheKey, videoId);
+            }
+        } else if (provider === 'youtube') {
             const meta = await getYoutubeMetadata(url, logger);
             if (meta) {
                 title = meta.title;
                 artist = meta.artist;
                 duration = meta.duration;
                 providerId = meta.providerId || url;
+                // cache metadata
+                await cache.set('metadata', providerId, { title, artist, duration, providerId });
             }
         }
-    } catch (e) {
-        logger.error({ message: 'Metadata fetch failed', error: e.message });
-        // For Spotify, metadata fetch is critical to get the search query.
-        if (provider === 'spotify') throw e;
-        if (provider === 'youtube') throw e; // Usually critical for YouTube too now
-    }
 
-    // 1.5 Deduplication Check
-    try {
-        const existingTrack = await prisma.track.findFirst({
-            where: {
-                provider: `${provider}:${providerId}`,
-                status: 'completed',
-            },
-            include: { files: true }
-        });
+        let targetProviderString = `${provider}:${providerId}`;
+        if (provider === 'spotify' && downloadUrl.includes('youtube')) {
+            try {
+                let ytId = downloadUrl.includes('v=') ? downloadUrl.split('v=')[1].split('&')[0] : null;
+                if (ytId) targetProviderString = `youtube:${ytId}`;
+            } catch { }
+        }
 
-        if (existingTrack && existingTrack.id !== trackId) {
-            // Verify files exist on disk
-            const hasFiles = existingTrack.files.length > 0 && existingTrack.files.every(f => {
-                const fullPath = path.join(DOWNLOADS_DIR, f.path);
-                return fs.existsSync(fullPath);
+        // Deduplication
+        try {
+            const existingTrack = await prisma.track.findFirst({
+                where: {
+                    provider: targetProviderString,
+                    status: 'completed',
+                },
+                include: { files: true }
             });
 
-            if (hasFiles) {
-                logger.info({ message: 'Deduplication success', existingTrackId: existingTrack.id });
-
-                if (existingTrackId) {
-                    await prisma.sessionItem.updateMany({
-                        where: { trackId: existingTrackId },
-                        data: { trackId: existingTrack.id }
-                    });
-                    await prisma.track.delete({ where: { id: existingTrackId } });
-                } else if (sessionToken) {
-                    await prisma.sessionItem.create({
-                        data: {
-                            sessionToken,
-                            trackId: existingTrack.id,
-                            source: 'requested',
-                            groupId: groupId
-                        }
-                    });
-                }
-
-                // Extend expiration
-                const now = new Date();
-                const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-                await prisma.track.update({
-                    where: { id: existingTrack.id },
-                    data: { expiresAt: expiresAt }
+            if (existingTrack && existingTrack.id !== trackId) {
+                const hasFiles = existingTrack.files.length > 0 && existingTrack.files.every(f => {
+                    const fullPath = path.join(DOWNLOADS_DIR, f.path);
+                    return fs.existsSync(fullPath);
                 });
 
-                return { trackId: existingTrack.id, status: 'completed' };
+                if (hasFiles) {
+                    logger.info({ message: 'Deduplication success', existingTrackId: existingTrack.id });
+
+                    if (existingTrackId) {
+                        await prisma.sessionItem.updateMany({
+                            where: { trackId: existingTrackId },
+                            data: { trackId: existingTrack.id }
+                        });
+                        await prisma.track.delete({ where: { id: existingTrackId } });
+                    } else if (sessionToken) {
+                        await prisma.sessionItem.create({
+                            data: {
+                                sessionToken,
+                                trackId: existingTrack.id,
+                                source: 'requested',
+                                groupId: groupId
+                            }
+                        });
+                    }
+
+                    const now = new Date();
+                    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+                    await prisma.track.update({
+                        where: { id: existingTrack.id },
+                        data: { expiresAt: expiresAt }
+                    });
+
+                    return { trackId: existingTrack.id, status: 'completed' };
+                }
             }
+        } catch (e) {
+            logger.error({ message: 'Deduplication check failed', error: e.message });
         }
-    } catch (e) {
-        logger.error({ message: 'Deduplication check failed', error: e.message });
-    }
 
-    // 2. Update or Create Database Record
-    if (existingTrackId) {
-        track = await prisma.track.update({
-            where: { id: existingTrackId },
-            data: {
-                provider: `${provider}:${providerId}`,
-                title,
-                artist,
-                durationSeconds: duration || 0,
-                status: 'processing'
-            }
-        });
-    } else {
-        track = await prisma.track.create({
-            data: {
-                id: trackId,
-                provider: `${provider}:${providerId}`,
-                title,
-                artist,
-                durationSeconds: duration || 0,
-                status: 'processing'
-            }
-        });
-
-        if (sessionToken) {
-            await prisma.sessionItem.create({
+        // Processing
+        if (existingTrackId) {
+            track = await prisma.track.update({
+                where: { id: existingTrackId },
                 data: {
-                    sessionToken,
-                    trackId: track.id,
-                    source: 'requested',
-                    groupId: groupId
+                    provider: targetProviderString,
+                    title,
+                    artist,
+                    durationSeconds: duration || 0,
+                    status: 'processing'
                 }
             });
-        }
-    }
+        } else {
+            track = await prisma.track.create({
+                data: {
+                    id: trackId,
+                    provider: targetProviderString,
+                    title,
+                    artist,
+                    durationSeconds: duration || 0,
+                    status: 'processing'
+                }
+            });
 
-    // 3. Download & Transcode
-    try {
-        if (duration > 900) {
-            throw new Error('Track too long (max 15m)');
+            if (sessionToken) {
+                await prisma.sessionItem.create({
+                    data: {
+                        sessionToken,
+                        trackId: track.id,
+                        source: 'requested',
+                        groupId: groupId
+                    }
+                });
+            }
         }
 
+        if (duration > 900) throw new Error('Track too long (max 15m)');
         const sourcePath = path.join(trackDir, 'source.webm');
 
         const trackCheck1 = await prisma.track.findUnique({ where: { id: track.id } });
         if (trackCheck1 && trackCheck1.status === 'cancelled') throw new Error('Job cancelled by user');
 
-        // Pass logger to download
         await downloadYoutube(downloadUrl, sourcePath, logger);
 
-        // Verification
         let actualSourcePath = sourcePath;
         if (!fs.existsSync(sourcePath)) {
             const files = fs.readdirSync(trackDir);
@@ -234,7 +238,6 @@ async function processJob(job, prisma) {
 
         const filesCreated = [];
         const mp3Path = path.join(trackDir, 'mp3.mp3');
-        logger.info({ message: 'Transcoding to mp3...' });
         const mp3Stats = await transcodeFile(actualSourcePath, mp3Path, 'mp3');
         filesCreated.push({
             format: 'mp3',
@@ -269,23 +272,54 @@ async function processJob(job, prisma) {
             }
         });
 
+        await circuitBreaker.record(true);
         return { trackId: track.id, status: 'completed' };
 
     } catch (err) {
         logger.error({ message: 'Processing failed', error: err.message });
 
-        let errMsg = err.message;
-        const isRateLimit = errMsg.includes('Status code: 429') || errMsg.includes('Sign in');
-        if (isRateLimit) errMsg = 'Rate Limit Reached (YouTube/Spotify) - Retrying...';
+        const errMsg = err.message;
 
-        await prisma.track.update({
-            where: { id: track.id },
-            data: {
-                status: 'failed',
-                error: errMsg
-            }
-        });
+        // --- ERROR CLASSIFICATION FOR RETRY ---
+
+        // 1. Unrecoverable Validation Errors (DO NOT RETRY)
+        const fatalErrors = [
+            'Invalid base62 id', // Spotify Malformed ID
+            'Invalid Spotify URL',
+            'Track too long',
+            'Unsupported provider',
+            'Sign in to confirm your age', // Often hard block
+            'Video unavailable'
+        ];
+
+        if (fatalErrors.some(f => errMsg.includes(f))) {
+            logger.info({ message: 'Fatal Error detected. Stopping retries.' });
+            await markFailed(prisma, track ? track.id : (existingTrackId || trackId), errMsg);
+            // DO NOT THROW. Return failure status.
+            return { status: 'failed', error: errMsg };
+        }
+
+        // 2. Recoverable Errors (Network, Rate Limit) -> Throw to Retry
+        const isRateLimit = errMsg.includes('Status code: 429') || errMsg.includes('Sign in');
+        const userMsg = isRateLimit ? 'Rate Limit Reached (YouTube/Spotify) - Retrying...' : errMsg;
+
+        await markFailed(prisma, track ? track.id : (existingTrackId || trackId), userMsg);
+
+        // Record failure in Circuit Breaker
+        await circuitBreaker.record(false);
+
         throw err;
+    }
+}
+
+async function markFailed(prisma, trackId, error) {
+    try {
+        await prisma.track.update({
+            where: { id: trackId },
+            data: { status: 'failed', error }
+        });
+    } catch (e) {
+        console.error('Failed to update track status', e);
     }
 }
 

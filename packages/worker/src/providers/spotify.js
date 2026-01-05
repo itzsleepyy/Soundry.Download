@@ -70,16 +70,25 @@ async function executeWithRetry(fn, retries = 3) {
 async function getSpotifyMetadata(url) {
     const api = getSpotifyApi();
 
-    // Parse ID from URL
-    // Supports: /track/ID, /album/ID, /playlist/ID
-    // Simple regex or split
-    // e.g. https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT
-    const parts = url.split('/');
-    const typeIndex = parts.findIndex(p => ['track', 'album', 'playlist'].includes(p));
-    if (typeIndex === -1) throw new Error('Invalid Spotify URL');
+    // Use URL object for robust parsing
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(url);
+    } catch (e) {
+        throw new Error(`Invalid URL format: ${url}`);
+    }
 
-    const type = parts[typeIndex];
-    const id = parts[typeIndex + 1].split('?')[0];
+    const segments = parsedUrl.pathname.split('/').filter(Boolean);
+    const typeIndex = segments.findIndex(s => ['track', 'album', 'playlist'].includes(s));
+
+    if (typeIndex === -1 || typeIndex + 1 >= segments.length) {
+        throw new Error(`Could not parse Spotify type/ID from: ${url}`);
+    }
+
+    const type = segments[typeIndex];
+    const id = segments[typeIndex + 1];
+
+    console.log(`[Spotify] Parsed URL: ${url} -> Type: ${type}, ID: ${id}`);
 
     return executeWithRetry(async () => {
         if (type === 'track') {
